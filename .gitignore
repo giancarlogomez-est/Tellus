@@ -38,9 +38,9 @@ venv/
 medicion de obra/baseline/
 medicion de obra/vuelos/
 medicion de obra/reportes/
-Mensure v2.0/data/raw/
-Mensure v2.0/data/processed/
-Mensure v2.0/reports/
+data/raw/
+data/processed/
+reports/
 
 # Streamlit
 .streamlit/secrets.toml
