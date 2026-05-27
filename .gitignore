@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+
+# IDE / herramientas
+.idea/
+.vscode/
+.claude/
+
+# Imágenes y rásters
+*.tif
+*.tiff
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+
+# Documentos
+*.pdf
+*.pptx
+*.docx
+*.xlsx
+*.xls
+
+# Datos / CAD / vectoriales pesados o generados
+*.zip
+*.dxf
+*.dwg
+*.geojson
+*.csv
+
+# Carpetas con datos brutos / salidas generadas
+medicion de obra/baseline/
+medicion de obra/vuelos/
+medicion de obra/reportes/
+Mensure v2.0/data/raw/
+Mensure v2.0/data/processed/
+Mensure v2.0/reports/
+
+# Streamlit
+.streamlit/secrets.toml

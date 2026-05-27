@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+data/raw/*.tif
+data/raw/*.tiff
+data/processed/*.xlsx
+reports/*.xlsx
+.streamlit/secrets.toml
+.idea/
+.vscode/

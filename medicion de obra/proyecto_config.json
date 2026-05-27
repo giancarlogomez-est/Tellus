@@ -1,0 +1,19 @@
+{
+  "_instrucciones": "Edita los valores con los datos reales del proyecto. Rutas relativas a la carpeta raíz (medicion de obra/).",
+  "nombre": "Mi Proyecto Vial ESING",
+  "tramo": "K0+000 – K0+300",
+  "contrato": "",
+  "dem_baseline": "baseline/dem_baseline.tif",
+  "eje_via": "baseline/eje_via.dxf",
+  "prog_inicio_m": 0.0,
+  "espaciado_secciones": 10.0,
+  "ancho_corredor": 12.0,
+  "factor_esponjamiento": 1.25,
+  "factor_contraccion": 0.9,
+  "epsg_proyecto": 9377,
+  "paso_muestreo_landxml": 4,
+  "vol_corte_objetivo": 15000.0,
+  "vol_relleno_objetivo": 25000.0,
+  "dz_min_plot": -3.0,
+  "dz_max_plot": 3.0
+}
