@@ -135,6 +135,13 @@ class ProjectState:
                 return p
         return None
 
+    def import_dem(self, src_path: str, fecha: str) -> None:
+        """Copia un .tif como vuelos/<fecha>/dsm.tif."""
+        import shutil
+        dest_dir = self.vuelos_dir / fecha
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_path, dest_dir / "dsm.tif")
+
     def dz_dia_path(self, fecha: str) -> Optional[Path]:
         """Raster ΔZ del día para un vuelo (carpeta vuelos/<fecha>)."""
         p = self.vuelos_dir / fecha / "dz_dia.tif"
