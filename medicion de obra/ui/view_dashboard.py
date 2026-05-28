@@ -95,6 +95,15 @@ class DashboardView(ctk.CTkFrame):
         )
         self.subtitulo.pack(anchor="w")
 
+        # Botón Actualizar
+        ctk.CTkButton(
+            header, text="↻  Actualizar", width=120, height=32,
+            fg_color=T.PRIMARY, hover_color=T.PRIMARY_HOV,
+            text_color=T.TEXT_ON_DARK, font=T.FONT_BODY,
+            corner_radius=8,
+            command=self.refresh,
+        ).pack(side="right", padx=(0, 0))
+
         # Filtros (frente y periodo, en orden visual: [periodo] [frente])
         for opciones in (
             ["Todos los frentes", "Frente A", "Frente B",

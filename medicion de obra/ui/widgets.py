@@ -1,6 +1,9 @@
 """Componentes UI reutilizables."""
 from __future__ import annotations
 
+import tkinter as tk
+from pathlib import Path
+
 import customtkinter as ctk
 
 from . import theme as T
@@ -215,3 +218,100 @@ class ProgressItem(ctk.CTkFrame):
         )
         bar.set(min(max(pct / 100, 0.0), 1.0))
         bar.pack(fill="x", pady=(0, 14))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# UploadCard  (borde punteado ámbar + icono OVNI)
+# ═══════════════════════════════════════════════════════════════════════════
+_UPLOAD_AMBER  = "#F59E0B"
+_UPLOAD_CARD_W = 210
+_UPLOAD_CARD_H = 210
+
+
+class UploadCard(tk.Frame):
+    """Tarjeta cuadrada con borde punteado ámbar, icono OVNI y chip de archivo.
+
+    Parámetros
+    ----------
+    number      Número que aparece junto al nombre (ej. 1, 2, 3). Usa 0 para omitirlo.
+    label       Nombre descriptivo de la tarjeta.
+    fmt         Línea de formato/extensión (texto secundario).
+    on_upload   Callable sin argumentos que se invoca al hacer clic.
+    loaded_path Ruta del archivo cargado actualmente (None = sin archivo).
+    """
+
+    def __init__(self, master, number: int, label: str, fmt: str,
+                 on_upload, loaded_path: "Path | None" = None, **kw):
+        bg = T.mc(T.CARD_BG)
+        super().__init__(master, width=_UPLOAD_CARD_W, height=_UPLOAD_CARD_H,
+                         bg=bg, **kw)
+        self.pack_propagate(False)
+        self._on_upload = on_upload
+
+        self._canvas = tk.Canvas(self, width=_UPLOAD_CARD_W, height=_UPLOAD_CARD_H,
+                                 bg=bg, highlightthickness=0, cursor="hand2")
+        self._canvas.place(x=0, y=0)
+        self._draw_border(loaded_path is not None)
+
+        # Icono OVNI
+        self._canvas.create_text(
+            _UPLOAD_CARD_W // 2, 68,
+            text="🛸", font=("Segoe UI Emoji", 34),
+            fill=_UPLOAD_AMBER, tags="click",
+        )
+        # Número + nombre
+        prefix = f"{number}. " if number else ""
+        self._canvas.create_text(
+            _UPLOAD_CARD_W // 2, 122,
+            text=f"{prefix}{label}",
+            font=("Segoe UI", 11, "bold"),
+            fill=T.mc(T.TEXT),
+            width=_UPLOAD_CARD_W - 24, tags="click",
+        )
+        # Formato / extensión
+        self._canvas.create_text(
+            _UPLOAD_CARD_W // 2, 144,
+            text=fmt, font=("Segoe UI", 8),
+            fill=T.mc(T.TEXT_MUTED), tags="click",
+        )
+        # Chip de archivo (fondo + texto)
+        self._canvas.create_rectangle(
+            14, _UPLOAD_CARD_H - 34, _UPLOAD_CARD_W - 14, _UPLOAD_CARD_H - 14,
+            fill=T.mc(T.HOVER_BG), outline="", tags="click",
+        )
+        self._chip = self._canvas.create_text(
+            _UPLOAD_CARD_W // 2, _UPLOAD_CARD_H - 24,
+            text=self._fmt_name(loaded_path),
+            font=("Segoe UI", 8),
+            fill=T.mc(T.SUCCESS if loaded_path else T.TEXT_MUTED),
+            width=_UPLOAD_CARD_W - 36, tags="click",
+        )
+
+        self._canvas.tag_bind("click", "<Button-1>", lambda e: self._on_upload())
+        self._canvas.bind("<Button-1>", lambda e: self._on_upload())
+
+    # ── API pública ──────────────────────────────────────────────────────
+    def set_loaded(self, p: "Path | None"):
+        self._draw_border(p is not None)
+        self._canvas.itemconfigure(
+            self._chip,
+            text=self._fmt_name(p),
+            fill=T.mc(T.SUCCESS if p else T.TEXT_MUTED),
+        )
+
+    # ── Helpers ──────────────────────────────────────────────────────────
+    def _draw_border(self, loaded: bool):
+        self._canvas.delete("border")
+        color = T.mc(T.SUCCESS) if loaded else _UPLOAD_AMBER
+        m = 6
+        self._canvas.create_rectangle(
+            m, m, _UPLOAD_CARD_W - m, _UPLOAD_CARD_H - m,
+            outline=color, width=2, dash=(6, 4), tags="border",
+        )
+
+    @staticmethod
+    def _fmt_name(p: "Path | None") -> str:
+        if p is None:
+            return "Sin archivo  —  haz clic para cargar"
+        n = p.name
+        return n if len(n) <= 28 else n[:25] + "…"

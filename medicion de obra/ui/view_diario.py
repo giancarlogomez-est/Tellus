@@ -7,7 +7,7 @@ from tkinter import filedialog, messagebox
 
 from . import theme as T
 from .state import ProjectState
-from .widgets import SectionTitle, Card, Pill
+from .widgets import SectionTitle, Card, Pill, UploadCard
 from .runner import ProcessDialog
 
 
@@ -148,20 +148,30 @@ class DiarioView(ctk.CTkFrame):
         up_card = Card(self, title="Cargar DEM diario")
         up_card.pack(fill="x", padx=20, pady=(0, 14))
 
-        up_row = ctk.CTkFrame(up_card, fg_color="transparent")
-        up_row.pack(fill="x", padx=18, pady=(0, 16))
+        up_inner = ctk.CTkFrame(up_card, fg_color="transparent")
+        up_inner.pack(padx=18, pady=(0, 18))
 
-        ctk.CTkButton(
-            up_row, text="📂  Subir DEM (.tif)", height=38, width=210,
-            fg_color=T.PRIMARY, hover_color=T.PRIMARY_HOV,
-            font=T.FONT_H2, command=self._subir_dem,
-        ).pack(side="left")
+        self._upload_card_dem = UploadCard(
+            up_inner, 0, "DEM Diario",
+            "Vuelo fotogramétrico  (GeoTIFF / .tif)",
+            on_upload=self._subir_dem,
+        )
+        self._upload_card_dem.pack(side="left", padx=(0, 20))
 
-        ctk.CTkLabel(
-            up_row,
-            text="Selecciona uno o varios archivos .tif  —  se guardarán en vuelos/<fecha>/dsm.tif",
-            font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
-        ).pack(side="left", padx=(16, 0))
+        hint = ctk.CTkLabel(
+            up_inner,
+            text=(
+                "Haz clic en la tarjeta para seleccionar\n"
+                "uno o varios archivos .tif.\n\n"
+                "Cada archivo se guardará en:\n"
+                "vuelos/<fecha>/dsm.tif\n\n"
+                "Se pedirá la fecha de vuelo\n"
+                "para cada archivo."
+            ),
+            font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+            justify="left", anchor="nw",
+        )
+        hint.pack(side="left", anchor="n", pady=8)
 
         # ── Tarjeta: lista de DEMs ───────────────────────────────────────
         list_card = Card(self, title="DEMs disponibles")
@@ -245,6 +255,15 @@ class DiarioView(ctk.CTkFrame):
         """Reconstruye la lista de DEMs desde disco."""
         disponibles = self.state.vuelos_disponibles()   # ordenados asc
         procesados  = self.state.vuelos_procesados()
+
+        # Actualizar chip de la tarjeta de carga
+        if disponibles:
+            from pathlib import Path
+            ultimo = sorted(disponibles)[-1]
+            p = self.state.vuelos_dir / ultimo / "dsm.tif"
+            self._upload_card_dem.set_loaded(p if p.exists() else None)
+        else:
+            self._upload_card_dem.set_loaded(None)
 
         # Limpiar filas anteriores
         for w in list(self._rows.values()):
@@ -333,7 +352,7 @@ class DiarioView(ctk.CTkFrame):
                 )
 
         if importados:
-            self.refresh()
+            self.refresh()   # también actualiza la tarjeta OVNI
             # Auto-seleccionar el último importado
             ultimo = sorted(importados)[-1]
             if ultimo in self._rows:

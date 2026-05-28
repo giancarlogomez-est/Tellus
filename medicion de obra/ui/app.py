@@ -8,19 +8,19 @@ from . import theme as T
 from .state import ProjectState
 from .view_dashboard import DashboardView
 from .view_diario import DiarioView
-from .view_dron import DronView
+from .view_dron import VolumenesView
 from .view_equipos import EquiposView
 from .view_reportes import ReportesView
 from .view_config import ConfigView
 
 
 NAV = [
-    ("dashboard", "Dashboard",            "📊"),
-    ("diario",    "Vuelo diario",         "✈"),
-    ("equipos",   "Equipos y Rendtos.",   "🚜"),
-    ("dron",      "Comparativo Pre/Post", "🛰"),
-    ("reportes",  "Reportes",             "📁"),
-    ("config",    "Configuración",        "⚙"),
+    ("dashboard", "Dashboard",           "📊"),
+    ("diario",    "Vuelos y modelos DEM","✈"),
+    ("dron",      "Volúmenes",           "📐"),
+    ("equipos",   "Equipos y Rendtos.",  "🚜"),
+    ("reportes",  "Reportes",            "📁"),
+    ("config",    "Configuración",       "⚙"),
 ]
 
 
@@ -122,7 +122,7 @@ class App(ctk.CTk):
             return EquiposView(self.main, self.state_,
                                on_updated=self._refresh_all)
         if key == "dron":
-            return DronView(self.main, self.state_)
+            return VolumenesView(self.main, self.state_)
         if key == "reportes":
             return ReportesView(self.main, self.state_)
         if key == "config":
