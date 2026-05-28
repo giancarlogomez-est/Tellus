@@ -40,18 +40,12 @@ VUELOS_DEMO = [
     ("22 May, 2024", "43.6 ha", "2.5 cm"),
 ]
 EQUIPOS_DEMO = [
-    ("CAT 336",  "Excavadora",     "Frente A", "8.2 h"),
-    ("CAT D8T",  "Bulldozer",      "Frente A", "7.5 h"),
-    ("CAT 740B", "Volqueta",       "Frente A", "9.1 h"),
-    ("CAT 320",  "Excavadora",     "Frente B", "8.0 h"),
-    ("CAT 140K", "Motoniveladora", "Frente B", "6.7 h"),
-]
-RENDIMIENTOS_DEMO = [
-    ("CAT 336",  "Excavadora",     "2,850 m³",  "347 m³/h",   True),
-    ("CAT D8T",  "Bulldozer",      "4,200 m³",  "560 m³/h",   True),
-    ("CAT 740B", "Volqueta",       "28 viajes", "186 m³/h",   True),
-    ("CAT 320",  "Excavadora",     "2,150 m³",  "269 m³/h",   False),
-    ("CAT 140K", "Motoniveladora", "1.8 ha",    "0.27 ha/h",  True),
+    # nombre, tipo, frente, horas, producción, rendimiento, subió (bool)
+    ("CAT 336",  "Excavadora",     "Frente A", "8.2 h", "2,850 m³",  "347 m³/h",  True),
+    ("CAT D8T",  "Bulldozer",      "Frente A", "7.5 h", "4,200 m³",  "560 m³/h",  True),
+    ("CAT 740B", "Volqueta",       "Frente A", "9.1 h", "28 viajes", "186 m³/h",  True),
+    ("CAT 320",  "Excavadora",     "Frente B", "8.0 h", "2,150 m³",  "269 m³/h",  False),
+    ("CAT 140K", "Motoniveladora", "Frente B", "6.7 h", "1.8 ha",    "0.27 ha/h", True),
 ]
 FRENTES_DEMO = [
     ("Frente A - Movimiento de Tierras", 68.3),
@@ -239,57 +233,26 @@ class DashboardView(ctk.CTkFrame):
         self.donut_holder.pack(fill="both", expand=True,
                                padx=12, pady=(0, 14))
 
-    # ── Fila 3: Equipos | Rendimientos | Frentes ────────────────────────
+    # ── Fila 3: Equipos + Rendimientos (unificado) | Frentes ────────────
     def _build_bottom_row(self):
         row = ctk.CTkFrame(self.scroll, fg_color="transparent")
         row.pack(fill="x", padx=20, pady=(0, 20))
-        row.grid_columnconfigure(0, weight=15, uniform="b")
-        row.grid_columnconfigure(1, weight=15, uniform="b")
-        row.grid_columnconfigure(2, weight=12, uniform="b")
+        row.grid_columnconfigure(0, weight=28, uniform="b")
+        row.grid_columnconfigure(1, weight=12, uniform="b")
 
-        # Equipos Activos
-        c_eq = Card(row, title="Equipos Activos",
-                    action_text="+ Registrar equipo", light=True)
-        c_eq.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        eq_tbl = DataTable(
-            c_eq, columns=["Equipo", "Tipo", "Frente", "Estado", "Horas hoy"],
-            widths=[120, 110, 90, 80, 80],
+        # Tabla unificada equipos + rendimiento
+        self.c_eq = Card(
+            row, title="Equipos y Rendimiento (Hoy)",
+            action_text="→ Ver detalle",
+            light=True,
         )
-        eq_tbl.pack(fill="x", padx=18, pady=(0, 14))
-        for nombre, tipo, frente, horas in EQUIPOS_DEMO:
-            badge = StatusBadge(eq_tbl, "Activo", kind="ok")
-            eq_tbl.add_row([nombre, tipo, frente, badge, horas])
-        ctk.CTkButton(
-            c_eq, text="Ver todos los equipos",
-            fg_color="transparent", text_color=T.PRIMARY,
-            hover_color=T.HOVER_BG, font=T.FONT_SMALL,
-        ).pack(pady=(0, 12))
-
-        # Rendimientos
-        c_re = Card(row, title="Rendimiento de Equipos (Hoy)", light=True)
-        c_re.grid(row=0, column=1, sticky="nsew", padx=8)
-        re_tbl = DataTable(
-            c_re, columns=["Equipo", "Tipo", "Producción", "Rendimiento"],
-            widths=[110, 110, 100, 110],
-        )
-        re_tbl.pack(fill="x", padx=18, pady=(0, 14))
-        for nombre, tipo, prod, rend, up in RENDIMIENTOS_DEMO:
-            arrow = "↗" if up else "↘"
-            color = T.SUCCESS if up else T.DANGER
-            rend_lbl = ctk.CTkLabel(
-                re_tbl, text=f"{rend}  {arrow}", anchor="w",
-                font=T.FONT_BODY, text_color=color,
-            )
-            re_tbl.add_row([nombre, tipo, prod, rend_lbl])
-        ctk.CTkButton(
-            c_re, text="Ver detalle de rendimientos",
-            fg_color="transparent", text_color=T.PRIMARY,
-            hover_color=T.HOVER_BG, font=T.FONT_SMALL,
-        ).pack(pady=(0, 12))
+        self.c_eq.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self.eq_holder = ctk.CTkFrame(self.c_eq, fg_color="transparent")
+        self.eq_holder.pack(fill="x", padx=18, pady=(0, 14))
 
         # Avance por Frente
         c_fr = Card(row, title="Avance por Frente", light=True)
-        c_fr.grid(row=0, column=2, sticky="nsew", padx=(8, 0))
+        c_fr.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
         fr_box = ctk.CTkFrame(c_fr, fg_color="transparent")
         fr_box.pack(fill="x", padx=18, pady=(2, 4))
         for label, pct in FRENTES_DEMO:
@@ -327,6 +290,7 @@ class DashboardView(ctk.CTkFrame):
             self._render_bar_chart_demo()
             self._render_donut(128450, 96320, -32130)
             self._render_basemap(None)
+            self._render_equipos_real()
             return
 
         # Datos reales del registro
@@ -359,6 +323,7 @@ class DashboardView(ctk.CTkFrame):
         self._render_bar_chart(df)
         self._render_donut(corte, relleno, neto)
         self._render_basemap(ult["fecha"].strftime("%Y-%m-%d"))
+        self._render_equipos_real()
 
     # ── Basemap (hillshade + heatmap cortes/llenos) ─────────────────────
     def _render_basemap(self, fecha):
@@ -550,3 +515,111 @@ class DashboardView(ctk.CTkFrame):
             else: self._fig_donut = None
         for w in target.winfo_children():
             w.destroy()
+
+    # ── Tabla unificada de equipos (demo) ────────────────────────────────
+    def _render_equipos_demo(self):
+        for w in self.eq_holder.winfo_children():
+            w.destroy()
+        tbl = DataTable(
+            self.eq_holder,
+            columns=["Equipo", "Tipo", "Frente", "Estado",
+                     "Horas", "Producción", "Rendimiento"],
+            widths=[110, 110, 90, 80, 70, 90, 100],
+        )
+        tbl.pack(fill="x")
+        for nombre, tipo, frente, horas, prod, rend, up in EQUIPOS_DEMO:
+            arrow = "↗" if up else "↘"
+            color = T.SUCCESS if up else T.DANGER
+            rend_lbl = ctk.CTkLabel(
+                tbl, text=f"{rend}  {arrow}", anchor="w",
+                font=T.FONT_BODY, text_color=color,
+            )
+            badge = StatusBadge(tbl, "Activo", kind="ok")
+            tbl.add_row([nombre, tipo, frente, badge, horas, prod, rend_lbl])
+
+    # ── Tabla unificada de equipos (datos reales) ────────────────────────
+    def _render_equipos_real(self):
+        for w in self.eq_holder.winfo_children():
+            w.destroy()
+
+        try:
+            import pandas as pd
+            equipos_data = self.state.load_equipos_data()
+            df_reg = self.state.load_registros_equipos()
+        except Exception:
+            self._render_equipos_demo()
+            return
+
+        equipos_list = equipos_data.get("equipos", [])
+        flotas = equipos_data.get("flotas", [])
+
+        # Si no hay equipos registrados, mostrar demo
+        if not equipos_list:
+            self._render_equipos_demo()
+            return
+
+        # Mapa equipo_id → flota
+        eq_to_flota: dict[str, dict] = {}
+        for fl in flotas:
+            for eid in fl.get("equipo_ids", []):
+                eq_to_flota[eid] = fl
+
+        # Último registro diario por equipo (si existe)
+        latest_reg: dict[str, dict] = {}
+        prev_rend: dict[str, float] = {}
+        if not df_reg.empty:
+            latest_date = df_reg["fecha"].max()
+            for _, r in df_reg[df_reg["fecha"] == latest_date].iterrows():
+                latest_reg[r["equipo_id"]] = r.to_dict()
+            for _, r in df_reg[df_reg["fecha"] < latest_date].sort_values("fecha").iterrows():
+                prev_rend[r["equipo_id"]] = float(r.get("rendimiento", 0) or 0)
+
+        tbl = DataTable(
+            self.eq_holder,
+            columns=["Equipo", "Tipo", "Flota", "Estado",
+                     "Horas", "Producción", "Rendimiento", "vs Ayer"],
+            widths=[110, 100, 110, 80, 65, 90, 100, 90],
+        )
+        tbl.pack(fill="x")
+
+        for eq in equipos_list:
+            eid = eq["id"]
+            fl = eq_to_flota.get(eid)
+            flota_name = fl["nombre"] if fl else "Sin flota"
+            u = eq.get("unidad_produccion", "m³")
+
+            rec = latest_reg.get(eid)
+            if rec:
+                horas_val = rec.get("horas_trabajadas")
+                prod_val  = rec.get("produccion")
+                rend_val  = rec.get("rendimiento")
+                horas_str = f"{horas_val:.1f} h" if pd.notna(horas_val) else "—"
+                prod_str  = f"{prod_val:,.1f} {u}" if pd.notna(prod_val) else "—"
+                rend_str  = f"{rend_val:.2f} {u}/h" if pd.notna(rend_val) else "—"
+            else:
+                horas_str = "—"
+                prod_str  = "—"
+                rend_str  = "—"
+                rend_val  = None
+
+            prev = prev_rend.get(eid)
+            if prev and rend_val is not None and pd.notna(rend_val) and prev != 0:
+                var = (float(rend_val) - prev) / abs(prev) * 100
+                up = var >= 0
+                arrow = "↗" if up else "↘"
+                vs_lbl = ctk.CTkLabel(
+                    tbl, text=f"{arrow} {abs(var):.1f}%",
+                    font=T.FONT_BODY,
+                    text_color=T.SUCCESS if up else T.DANGER,
+                    anchor="w",
+                )
+            else:
+                vs_lbl = ctk.CTkLabel(tbl, text="—", font=T.FONT_BODY,
+                                      text_color=T.TEXT_MUTED, anchor="w")
+
+            badge = StatusBadge(tbl, "Activo", kind="ok")
+            tbl.add_row([
+                eq.get("nombre", ""), eq.get("tipo", ""),
+                flota_name, badge,
+                horas_str, prod_str, rend_str, vs_lbl,
+            ])

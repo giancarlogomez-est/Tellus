@@ -9,16 +9,18 @@ from .state import ProjectState
 from .view_dashboard import DashboardView
 from .view_diario import DiarioView
 from .view_dron import DronView
+from .view_equipos import EquiposView
 from .view_reportes import ReportesView
 from .view_config import ConfigView
 
 
 NAV = [
-    ("dashboard", "Dashboard",        "📊"),
-    ("diario",    "Vuelo diario",     "✈"),
+    ("dashboard", "Dashboard",            "📊"),
+    ("diario",    "Vuelo diario",         "✈"),
+    ("equipos",   "Equipos y Rendtos.",   "🚜"),
     ("dron",      "Comparativo Pre/Post", "🛰"),
-    ("reportes",  "Reportes",         "📁"),
-    ("config",    "Configuración",    "⚙"),
+    ("reportes",  "Reportes",             "📁"),
+    ("config",    "Configuración",        "⚙"),
 ]
 
 
@@ -116,6 +118,9 @@ class App(ctk.CTk):
         if key == "diario":
             return DiarioView(self.main, self.state_,
                               on_processed=self._refresh_all)
+        if key == "equipos":
+            return EquiposView(self.main, self.state_,
+                               on_updated=self._refresh_all)
         if key == "dron":
             return DronView(self.main, self.state_)
         if key == "reportes":

@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +34,8 @@ class ProjectState:
         self.odm_script: Path = base / "02_dron_odm" / "calculo_volumen_odm.py"
         self.gen_serie_script: Path = base / "03_pipeline_diario" / "generar_serie_ejemplo.py"
         self.gen_dems_script: Path = base / "02_dron_odm" / "generar_dems_ejemplo.py"
+        self.equipos_path: Path = base / "equipos.json"
+        self.registros_equipos_path: Path = base / "registros_equipos.csv"
 
     # ── Configuración ────────────────────────────────────────────────────
     def load_config(self) -> Optional[dict]:
@@ -146,6 +149,42 @@ class ProjectState:
         """Raster ΔZ del día para un vuelo (carpeta vuelos/<fecha>)."""
         p = self.vuelos_dir / fecha / "dz_dia.tif"
         return p if p.exists() else None
+
+    # ── Equipos y flotas ────────────────────────────────────────────────
+    def load_equipos_data(self) -> dict:
+        if not self.equipos_path.exists():
+            return {"equipos": [], "flotas": []}
+        return json.loads(self.equipos_path.read_text(encoding="utf-8"))
+
+    def save_equipos_data(self, data: dict) -> None:
+        self.equipos_path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def load_registros_equipos(self) -> pd.DataFrame:
+        if not self.registros_equipos_path.exists():
+            return pd.DataFrame()
+        df = pd.read_csv(self.registros_equipos_path)
+        if df.empty:
+            return df
+        df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+        return df.sort_values("fecha").reset_index(drop=True)
+
+    def save_registro_equipo(self, registro: dict) -> None:
+        df = self.load_registros_equipos()
+        if not df.empty and "fecha" in df.columns and "equipo_id" in df.columns:
+            try:
+                target = date.fromisoformat(str(registro["fecha"]))
+                mask = ~(
+                    (df["fecha"].dt.date == target)
+                    & (df["equipo_id"] == registro["equipo_id"])
+                )
+                df = df[mask]
+            except Exception:
+                pass
+        new_row = pd.DataFrame([registro])
+        df = pd.concat([df, new_row], ignore_index=True)
+        df.to_csv(self.registros_equipos_path, index=False, encoding="utf-8")
 
     def ultimo_dz_dia(self) -> Optional[Path]:
         """ΔZ del vuelo más reciente que tenga dz_dia (fallback demo)."""
