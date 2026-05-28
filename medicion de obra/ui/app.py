@@ -46,14 +46,14 @@ class App(ctk.CTk):
     # ── Sidebar ─────────────────────────────────────────────────────────
     def _build_sidebar(self):
         side = ctk.CTkFrame(self, width=230, corner_radius=0,
-                             fg_color="#0f1115")
+                             fg_color=T.SIDEBAR_BG)
         side.grid(row=0, column=0, sticky="nsew")
         side.grid_propagate(False)
 
         # Branding
         brand = ctk.CTkLabel(side, text="VolumenView",
                               font=(T.FONT_FAMILY, 18, "bold"),
-                              text_color="white", anchor="w")
+                              text_color=T.TEXT, anchor="w")
         brand.pack(fill="x", padx=22, pady=(22, 0))
         sub = ctk.CTkLabel(side, text="Avance de obras viales",
                             font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
@@ -65,8 +65,8 @@ class App(ctk.CTk):
             b = ctk.CTkButton(
                 side, text=f"  {icon}   {label}", anchor="w",
                 height=42, corner_radius=8,
-                fg_color="transparent", text_color="#D1D5DB",
-                hover_color="#1F2937", font=T.FONT_BODY,
+                fg_color="transparent", text_color=T.TEXT_MUTED,
+                hover_color=T.HOVER_BG, font=T.FONT_BODY,
                 command=lambda k=key: self.show(k),
             )
             b.pack(fill="x", padx=14, pady=2)
@@ -79,15 +79,16 @@ class App(ctk.CTk):
         ctk.CTkOptionMenu(
             footer, values=["Oscuro", "Claro", "Sistema"],
             variable=self.tema_var, command=self._cambiar_tema,
-            fg_color="#1F2937", button_color="#1F2937",
-            button_hover_color="#374151",
+            fg_color=T.INPUT_BG, button_color=T.INPUT_BG,
+            button_hover_color=T.INPUT_HOVER, text_color=T.TEXT,
+            dropdown_fg_color=T.CARD_BG, dropdown_text_color=T.TEXT,
         ).pack(fill="x", pady=(0, 6))
         ctk.CTkLabel(footer, text=f"v1.0  ·  {self.state_.base.name}",
                       font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
                       anchor="w").pack(fill="x")
 
     def _build_main(self):
-        self.main = ctk.CTkFrame(self, fg_color="#11141a")
+        self.main = ctk.CTkFrame(self, fg_color=T.MAIN_BG)
         self.main.grid(row=0, column=1, sticky="nsew")
         self.main.grid_columnconfigure(0, weight=1)
         self.main.grid_rowconfigure(0, weight=1)
@@ -99,9 +100,9 @@ class App(ctk.CTk):
             self._views[key].grid(row=0, column=0, sticky="nsew")
         for k, b in self._nav_btns.items():
             if k == key:
-                b.configure(fg_color=T.PRIMARY, text_color="white")
+                b.configure(fg_color=T.PRIMARY, text_color=T.TEXT_ON_DARK)
             else:
-                b.configure(fg_color="transparent", text_color="#D1D5DB")
+                b.configure(fg_color="transparent", text_color=T.TEXT_MUTED)
         self._views[key].tkraise()
         # Refrescar la vista cada vez que se entra
         v = self._views[key]
@@ -133,6 +134,8 @@ class App(ctk.CTk):
     def _cambiar_tema(self, valor: str):
         m = {"Oscuro": "dark", "Claro": "light", "Sistema": "system"}
         ctk.set_appearance_mode(m.get(valor, "dark"))
+        # Re-renderizar vistas con figuras matplotlib (no conmutan solas)
+        self._refresh_all()
 
 
 def main():

@@ -126,3 +126,26 @@ class ProjectState:
     def heatmap_para_fecha(self, fecha: str) -> Optional[Path]:
         p = self.reportes_dir / "diarios" / f"heatmap_{fecha}.png"
         return p if p.exists() else None
+
+    # ── Rásters para el basemap del dashboard ────────────────────────────
+    def dem_baseline_path(self) -> Optional[Path]:
+        for ext in ("tif", "tiff"):
+            p = self.baseline_dir / f"dem_baseline.{ext}"
+            if p.exists():
+                return p
+        return None
+
+    def dz_dia_path(self, fecha: str) -> Optional[Path]:
+        """Raster ΔZ del día para un vuelo (carpeta vuelos/<fecha>)."""
+        p = self.vuelos_dir / fecha / "dz_dia.tif"
+        return p if p.exists() else None
+
+    def ultimo_dz_dia(self) -> Optional[Path]:
+        """ΔZ del vuelo más reciente que tenga dz_dia (fallback demo)."""
+        if not self.vuelos_dir.exists():
+            return None
+        for d in sorted(self.vuelos_dir.iterdir(), reverse=True):
+            p = d / "dz_dia.tif"
+            if d.is_dir() and p.exists():
+                return p
+        return None

@@ -20,7 +20,10 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
+from PIL import Image
+
 from . import theme as T
+from .basemap import build_overlay
 from .state import ProjectState
 from .widgets import (
     Card, DataTable, KPICardIcon, ProgressItem,
@@ -149,20 +152,16 @@ class DashboardView(ctk.CTkFrame):
                    light=True)
         v3d.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
 
-        # Placeholder (gradiente simulado)
-        ph = ctk.CTkFrame(v3d, height=170, corner_radius=8,
-                          fg_color="#DBEAFE")
-        ph.pack(fill="x", padx=18, pady=(0, 8))
-        ph.pack_propagate(False)
-        ctk.CTkLabel(ph, text="🏔",
-                     font=(T.FONT_FAMILY, 60),
-                     text_color="#94A3B8").place(relx=0.5, rely=0.5,
-                                                 anchor="center")
-        ctk.CTkLabel(ph, text="Cotas (m)   100  120  140  160",
-                     font=T.FONT_TINY, fg_color="white",
-                     corner_radius=4, text_color=T.TEXT,
-                     padx=6, pady=2).place(x=8, rely=1.0,
-                                           anchor="sw", y=-8)
+        # Basemap: hillshade del DEM + heatmap de cortes/llenos del vuelo
+        self.v3d_holder = ctk.CTkFrame(v3d, height=190, corner_radius=8,
+                                       fg_color=T.HOVER_BG)
+        self.v3d_holder.pack(fill="x", padx=18, pady=(0, 4))
+        self.v3d_holder.pack_propagate(False)
+        self._v3d_img = None
+        self.v3d_caption = ctk.CTkLabel(
+            v3d, text="Rojo = corte · Verde = relleno",
+            font=T.FONT_TINY, text_color=T.TEXT_MUTED)
+        self.v3d_caption.pack(anchor="w", padx=18, pady=(0, 6))
 
         self._surf_var = ctk.StringVar(value="actual")
         radios = ctk.CTkFrame(v3d, fg_color="transparent")
@@ -220,9 +219,9 @@ class DashboardView(ctk.CTkFrame):
             tabs, values=["Diario", "Semanal", "Mensual"],
             variable=self._bar_period,
             font=T.FONT_SMALL,
-            fg_color="#F3F4F6", selected_color=T.CARD_BG,
-            selected_hover_color=T.CARD_BG, unselected_color="#F3F4F6",
-            unselected_hover_color="#E5E7EB",
+            fg_color=T.HOVER_BG, selected_color=T.CARD_BG,
+            selected_hover_color=T.CARD_BG, unselected_color=T.HOVER_BG,
+            unselected_hover_color=T.CARD_BORDER,
             text_color=T.TEXT, text_color_disabled=T.TEXT_MUTED,
             corner_radius=6, height=26,
         ).pack(side="right")
@@ -327,6 +326,7 @@ class DashboardView(ctk.CTkFrame):
             self._render_flights_demo()
             self._render_bar_chart_demo()
             self._render_donut(128450, 96320, -32130)
+            self._render_basemap(None)
             return
 
         # Datos reales del registro
@@ -358,6 +358,40 @@ class DashboardView(ctk.CTkFrame):
         self._render_flights(df)
         self._render_bar_chart(df)
         self._render_donut(corte, relleno, neto)
+        self._render_basemap(ult["fecha"].strftime("%Y-%m-%d"))
+
+    # ── Basemap (hillshade + heatmap cortes/llenos) ─────────────────────
+    def _render_basemap(self, fecha):
+        holder = getattr(self, "v3d_holder", None)
+        if holder is None:
+            return
+        for w in holder.winfo_children():
+            w.destroy()
+
+        dz_path = self.state.dz_dia_path(fecha) if fecha else None
+        if dz_path is None:
+            dz_path = self.state.ultimo_dz_dia()
+        dem_path = self.state.dem_baseline_path()
+
+        img = build_overlay(dem_path, dz_path) if dz_path else None
+        if img is None:
+            self._v3d_img = None
+            ctk.CTkLabel(
+                holder, text="Sin datos de cortes/llenos para mostrar",
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+            ).place(relx=0.5, rely=0.5, anchor="center")
+            return
+
+        holder.update_idletasks()
+        avail_w = max(holder.winfo_width() - 4, 360)
+        avail_h = max(holder.winfo_height() - 4, 150)
+        ratio = min(avail_w / img.width, avail_h / img.height)
+        size = (max(int(img.width * ratio), 120),
+                max(int(img.height * ratio), 60))
+        self._v3d_img = ctk.CTkImage(light_image=img, dark_image=img,
+                                     size=size)
+        ctk.CTkLabel(holder, image=self._v3d_img, text="").place(
+            relx=0.5, rely=0.5, anchor="center")
 
     # ── Helpers ─────────────────────────────────────────────────────────
     def _load_history_safe(self):
@@ -428,10 +462,11 @@ class DashboardView(ctk.CTkFrame):
         self._clear_canvas("bar")
 
         plt.style.use("default")
-        fig = Figure(figsize=(7, 3.2), dpi=100, facecolor=T.CARD_BG)
+        bg = T.mc(T.CARD_BG); axis = T.mc(T.AXIS_FG); grid = T.mc(T.GRID_COLOR)
+        fig = Figure(figsize=(7, 3.2), dpi=100, facecolor=bg)
         self._fig_bar = fig
         ax = fig.add_subplot(111)
-        ax.set_facecolor(T.CARD_BG)
+        ax.set_facecolor(bg)
 
         x = range(len(labels))
         ax.bar(x,  exc, color=T.CORTE_COLOR, label="Cortes (m³)", width=0.55)
@@ -439,16 +474,16 @@ class DashboardView(ctk.CTkFrame):
                label="Llenos (m³)", width=0.55)
         neto = [a - b for a, b in zip(exc, ter)]
         ax.plot(x, neto, "-o", color=T.PRIMARY, lw=2, ms=5,
-                mfc=T.PRIMARY, mec="white", label="Neto (m³)")
-        ax.axhline(0, color="#E5E7EB", lw=0.6)
+                mfc=T.PRIMARY, mec=bg, label="Neto (m³)")
+        ax.axhline(0, color=grid, lw=0.6)
         ax.set_xticks(list(x))
-        ax.set_xticklabels(labels, fontsize=8, color="#9CA3AF")
+        ax.set_xticklabels(labels, fontsize=8, color=axis)
         ax.legend(fontsize=8, frameon=False, loc="upper left",
-                  ncol=3, bbox_to_anchor=(0, 1.08))
-        ax.grid(axis="y", ls="-", color="#F3F4F6")
-        ax.tick_params(colors="#9CA3AF", labelsize=8)
+                  ncol=3, bbox_to_anchor=(0, 1.08), labelcolor=axis)
+        ax.grid(axis="y", ls="-", color=grid)
+        ax.tick_params(colors=axis, labelsize=8)
         for s in ax.spines.values():
-            s.set_color("#F3F4F6")
+            s.set_color(grid)
         fig.tight_layout()
 
         canvas = FigureCanvasTkAgg(fig, master=self.bar_holder)
@@ -460,20 +495,21 @@ class DashboardView(ctk.CTkFrame):
         total = abs(corte) + abs(relleno)
 
         plt.style.use("default")
-        fig = Figure(figsize=(4, 3.4), dpi=100, facecolor=T.CARD_BG)
+        bg = T.mc(T.CARD_BG)
+        fig = Figure(figsize=(4, 3.4), dpi=100, facecolor=bg)
         self._fig_donut = fig
         ax = fig.add_subplot(111)
-        ax.set_facecolor(T.CARD_BG)
+        ax.set_facecolor(bg)
         ax.pie(
             [max(abs(corte), 0.01), max(abs(relleno), 0.01)],
             colors=[T.CORTE_COLOR, T.RELLENO_COLOR],
             startangle=90, counterclock=False,
-            wedgeprops=dict(width=0.32, edgecolor="white"),
+            wedgeprops=dict(width=0.32, edgecolor=bg),
         )
         ax.text(0, 0.12, "Volumen Total", ha="center",
-                fontsize=9, color=T.TEXT_MUTED)
+                fontsize=9, color=T.mc(T.TEXT_MUTED))
         ax.text(0, -0.12, f"{int(total):,} m³", ha="center",
-                fontsize=14, fontweight="bold", color=T.TEXT)
+                fontsize=14, fontweight="bold", color=T.mc(T.TEXT))
         ax.set(aspect="equal")
         fig.tight_layout()
 

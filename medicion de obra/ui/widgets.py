@@ -15,7 +15,7 @@ class KPICard(ctk.CTkFrame):
     def __init__(self, master, label: str, value: str = "—",
                  unit: str = "", accent: str = T.PRIMARY, **kw):
         super().__init__(master, corner_radius=12, border_width=1,
-                         border_color="#374151", **kw)
+                         border_color=T.CARD_BORDER, **kw)
         self._accent = accent
 
         self.lbl = ctk.CTkLabel(self, text=label.upper(),
@@ -64,16 +64,16 @@ class KPICardIcon(ctk.CTkFrame):
         tx = 78
         self.lbl = ctk.CTkLabel(self, text=label, font=T.FONT_KPI_LBL,
                                 text_color=T.TEXT_MUTED, anchor="w")
-        self.lbl.place(x=tx, y=16)
+        self.lbl.place(x=tx, y=12)
         self.val = ctk.CTkLabel(self, text=value, font=T.FONT_KPI,
                                 text_color=T.TEXT, anchor="w")
-        self.val.place(x=tx, y=32)
+        self.val.place(x=tx, y=36)
         color = T.SUCCESS if delta_up else T.DANGER
         self.delta = ctk.CTkLabel(
             self, font=T.FONT_SMALL, text_color=color, anchor="w",
             text=(f"{delta}    {delta_suffix}" if delta else ""),
         )
-        self.delta.place(x=tx, y=68)
+        self.delta.place(x=tx, y=70)
 
     def set_value(self, value: str, delta: str = "",
                   delta_up: bool = True,
@@ -104,7 +104,7 @@ class Card(ctk.CTkFrame):
             kw.setdefault("fg_color", T.CARD_BG)
             kw.setdefault("border_color", T.CARD_BORDER)
         else:
-            kw.setdefault("border_color", "#374151")
+            kw.setdefault("border_color", T.CARD_BORDER)
         super().__init__(master, corner_radius=12, border_width=1, **kw)
         if title:
             header = ctk.CTkFrame(self, fg_color="transparent", height=36)
@@ -211,7 +211,7 @@ class ProgressItem(ctk.CTkFrame):
 
         bar = ctk.CTkProgressBar(
             self, height=6, progress_color=color,
-            fg_color="#F3F4F6", corner_radius=3,
+            fg_color=T.HOVER_BG, corner_radius=3,
         )
         bar.set(min(max(pct / 100, 0.0), 1.0))
         bar.pack(fill="x", pady=(0, 14))

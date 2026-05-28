@@ -1,6 +1,25 @@
-"""Paleta y constantes visuales de la aplicación."""
+"""Paleta y constantes visuales de la aplicación.
 
-# Acentos
+Los colores de superficie y texto son tuplas ``(claro, oscuro)`` que
+CustomTkinter conmuta automáticamente según el modo de apariencia.
+Para matplotlib (que no entiende esas tuplas) usar ``mc(color)`` que
+resuelve la tupla al hex del modo activo.
+"""
+import customtkinter as ctk
+
+
+def mc(color):
+    """Resuelve un color ``(claro, oscuro)`` al hex del modo actual.
+
+    Para usar en matplotlib y otros contextos que requieren un color
+    concreto. Si recibe un string lo devuelve tal cual.
+    """
+    if isinstance(color, (tuple, list)):
+        return color[0] if ctk.get_appearance_mode() == "Light" else color[1]
+    return color
+
+
+# Acentos (independientes del modo)
 PRIMARY      = "#2563EB"   # azul de marca
 PRIMARY_HOV  = "#1D4ED8"
 SUCCESS      = "#10B981"
@@ -17,21 +36,33 @@ RELLENO_LIGHT  = "#34D399"
 BALANCE_POS    = "#10B981"
 BALANCE_NEG    = "#EF4444"
 
-# Superficies — tema oscuro (vistas existentes)
+# Superficies legacy (compatibilidad)
 CARD_DARK     = "#1F2937"
 CARD_LIGHT    = "#F3F4F6"
 
-# Superficies — tema claro (dashboard estilo mockup)
-APP_BG          = "#F5F7FB"
-CARD_BG         = "#FFFFFF"
-CARD_BORDER     = "#E5E7EB"
-HOVER_BG        = "#F3F4F6"
-TABLE_HOVER     = "#FAFAFA"
+# Superficies — mode-aware (claro, oscuro)
+APP_BG          = ("#F5F7FB", "#0B0F14")
+SIDEBAR_BG      = ("#FFFFFF", "#0f1115")
+SIDEBAR_BORDER  = ("#E5E7EB", "#0f1115")
+MAIN_BG         = ("#FFFFFF", "#11141a")
+CARD_BG         = ("#FFFFFF", "#1F2937")
+CARD_BORDER     = ("#E5E7EB", "#374151")
+HOVER_BG        = ("#F3F4F6", "#1F2937")
+TABLE_HOVER     = ("#FAFAFA", "#262B33")
+INPUT_BG        = ("#FFFFFF", "#1F2937")
+INPUT_HOVER     = ("#F3F4F6", "#374151")
 
-# Texto
-TEXT        = "#111827"
-TEXT_MUTED  = "#6B7280"
-TEXT_FAINT  = "#9CA3AF"
+# Texto — mode-aware (claro, oscuro)
+TEXT        = ("#111827", "#F3F4F6")
+TEXT_MUTED  = ("#6B7280", "#9CA3AF")
+TEXT_FAINT  = ("#9CA3AF", "#6B7280")
+TEXT_ON_DARK = "#F3F4F6"   # texto que va sobre acentos sólidos
+
+# Colores para figuras matplotlib (claro, oscuro) — resolver con mc()
+PLOT_BG       = ("#FFFFFF", "#1F2937")
+PLOT_3D_BG    = ("#FFFFFF", "#1a1d23")
+AXIS_FG       = ("#6B7280", "#cbd5e1")
+GRID_COLOR    = ("#F3F4F6", "#374151")
 
 # Chips de KPI (background, foreground) — mockup
 CHIP = {
@@ -53,5 +84,5 @@ FONT_BODY     = (FONT_FAMILY, 11)
 FONT_SMALL    = (FONT_FAMILY, 10)
 FONT_TINY     = (FONT_FAMILY, 9)
 FONT_KPI      = (FONT_FAMILY, 22, "bold")
-FONT_KPI_LBL  = (FONT_FAMILY, 10)
+FONT_KPI_LBL  = (FONT_FAMILY, 12)
 FONT_MONO     = ("Consolas", 10)

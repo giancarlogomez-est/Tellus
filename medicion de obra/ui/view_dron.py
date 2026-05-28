@@ -51,7 +51,7 @@ class DronView(ctk.CTkFrame):
         ctk.CTkButton(
             bar, text="Generar DEMs de ejemplo", height=44, width=200,
             fg_color="transparent", border_width=1, border_color=T.PRIMARY,
-            text_color=T.PRIMARY, hover_color="#1F2937",
+            text_color=T.PRIMARY, hover_color=T.HOVER_BG,
             command=self._demo,
         ).pack(side="right", padx=(0, 10))
 

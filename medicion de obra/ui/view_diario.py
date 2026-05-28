@@ -77,7 +77,7 @@ class DiarioView(ctk.CTkFrame):
         self.btn_demo = ctk.CTkButton(
             bar, text="Generar serie de 7 días (demo)", height=44, width=240,
             fg_color="transparent", border_width=1, border_color=T.PRIMARY,
-            text_color=T.PRIMARY, hover_color="#1F2937",
+            text_color=T.PRIMARY, hover_color=T.HOVER_BG,
             command=self._generar_demo)
         self.btn_demo.pack(side="right", padx=(0, 10))
 
