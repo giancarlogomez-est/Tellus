@@ -31,34 +31,6 @@ from .widgets import (
 )
 
 
-# ── Datos demo (mockup) ─────────────────────────────────────────────────
-VUELOS_DEMO = [
-    ("26 May, 2024", "45.6 ha", "2.3 cm"),
-    ("25 May, 2024", "45.1 ha", "2.3 cm"),
-    ("24 May, 2024", "44.8 ha", "2.4 cm"),
-    ("23 May, 2024", "44.2 ha", "2.4 cm"),
-    ("22 May, 2024", "43.6 ha", "2.5 cm"),
-]
-EQUIPOS_DEMO = [
-    # nombre, tipo, frente, horas, producción, rendimiento, subió (bool)
-    ("CAT 336",  "Excavadora",     "Frente A", "8.2 h", "2,850 m³",  "347 m³/h",  True),
-    ("CAT D8T",  "Bulldozer",      "Frente A", "7.5 h", "4,200 m³",  "560 m³/h",  True),
-    ("CAT 740B", "Volqueta",       "Frente A", "9.1 h", "28 viajes", "186 m³/h",  True),
-    ("CAT 320",  "Excavadora",     "Frente B", "8.0 h", "2,150 m³",  "269 m³/h",  False),
-    ("CAT 140K", "Motoniveladora", "Frente B", "6.7 h", "1.8 ha",    "0.27 ha/h", True),
-]
-FRENTES_DEMO = [
-    ("Frente A - Movimiento de Tierras", 68.3),
-    ("Frente B - Movimiento de Tierras", 54.7),
-    ("Frente C - Pavimentos",            38.9),
-    ("Frente D - Obras Complementarias", 72.1),
-]
-BAR_DEMO_LABELS = ["20 May", "21 May", "22 May", "23 May",
-                   "24 May", "25 May", "26 May"]
-BAR_DEMO_EXC = [98000, 115000, 105000, 112000, 108000, 118000, 128450]
-BAR_DEMO_TER = [74000,  88000,  79000,  85000,  82000,  90000,  96320]
-
-
 class DashboardView(ctk.CTkFrame):
     def __init__(self, master, state: ProjectState):
         super().__init__(master, fg_color=T.APP_BG)
@@ -104,18 +76,6 @@ class DashboardView(ctk.CTkFrame):
             command=self.refresh,
         ).pack(side="right", padx=(0, 0))
 
-        # Filtros (frente y periodo, en orden visual: [periodo] [frente])
-        for opciones in (
-            ["Todos los frentes", "Frente A", "Frente B",
-             "Frente C", "Frente D"],
-            ["20 - 26 Mayo, 2024", "13 - 19 Mayo, 2024", "Mes actual"],
-        ):
-            ctk.CTkOptionMenu(
-                header, values=opciones, width=160,
-                fg_color=T.CARD_BG, button_color=T.CARD_BG,
-                button_hover_color=T.HOVER_BG, text_color=T.TEXT,
-                dropdown_fg_color=T.CARD_BG, dropdown_text_color=T.TEXT,
-            ).pack(side="right", padx=(0, 8))
 
     # ── KPI grid + Vista 3D ─────────────────────────────────────────────
     def _build_kpi_grid(self):
@@ -170,8 +130,8 @@ class DashboardView(ctk.CTkFrame):
         radios = ctk.CTkFrame(v3d, fg_color="transparent")
         radios.pack(fill="x", padx=18, pady=(2, 6))
         for val, txt, sub in [
-            ("actual",   "Superficie actual",   "26 Mayo, 2024"),
-            ("anterior", "Superficie anterior", "25 Mayo, 2024"),
+            ("actual",   "Superficie actual",   "Último vuelo procesado"),
+            ("anterior", "Superficie anterior", "Vuelo previo"),
             ("diseno",   "Diseño",              "Superficie de proyecto"),
         ]:
             item = ctk.CTkFrame(radios, fg_color="transparent")
@@ -259,14 +219,11 @@ class DashboardView(ctk.CTkFrame):
         self.eq_holder = ctk.CTkFrame(self.c_eq, fg_color="transparent")
         self.eq_holder.pack(fill="x", padx=18, pady=(0, 14))
 
-        # Avance por Frente
-        c_fr = Card(row, title="Avance por Frente", light=True)
+        # Volumen por Frente
+        c_fr = Card(row, title="Volumen por Frente", light=True)
         c_fr.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-        fr_box = ctk.CTkFrame(c_fr, fg_color="transparent")
-        fr_box.pack(fill="x", padx=18, pady=(2, 4))
-        for label, pct in FRENTES_DEMO:
-            ProgressItem(fr_box, label, pct,
-                         color=T.PRIMARY).pack(fill="x")
+        self.fr_box = ctk.CTkFrame(c_fr, fg_color="transparent")
+        self.fr_box.pack(fill="x", padx=18, pady=(2, 4))
         ctk.CTkButton(
             c_fr, text="Ver todos los frentes",
             fg_color="transparent", text_color=T.PRIMARY,
@@ -286,20 +243,35 @@ class DashboardView(ctk.CTkFrame):
             text=f"{nombre} · {tramo}" if tramo else nombre,
         )
 
+        # Longitud y área calculadas desde frentes + configuración del corredor
+        frentes_cfg = self.state.load_frentes()
+        long_str = "—"
+        area_str = "—"
+        if frentes_cfg:
+            total_long_m = sum(
+                float(f.get("abs_fin", 0)) - float(f.get("abs_ini", 0))
+                for f in frentes_cfg
+            )
+            if total_long_m > 0:
+                long_str = f"{total_long_m / 1000:.2f} km"
+                ancho = float(cfg.get("ancho_corredor", 0))
+                if ancho > 0:
+                    area_ha = (total_long_m * 2 * ancho) / 10_000
+                    area_str = f"{area_ha:.1f} ha"
+
         if df.empty:
-            # Demo (coincide con el mockup)
-            self.kpi_ter.set_value("96,320 m³",   "↑ 8.3%",  True)
-            self.kpi_exc.set_value("128,450 m³",  "↑ 12.5%", False)
-            self.kpi_net.set_value("-32,130 m³",  "↑ 4.2%",  True)
-            self.kpi_area.set_value("45.6 ha",    "↑ 5.1 ha", True)
-            self.kpi_pav.set_value("2.45 km",     "↑ 0.18 km", True)
-            self.kpi_avg.set_value("62.7%",       "↑ 3.6%",   True,
-                                   delta_suffix="vs semana pasada")
-            self._render_flights_demo()
-            self._render_bar_chart_demo()
-            self._render_donut(128450, 96320, -32130)
+            self.kpi_ter.set_value("—")
+            self.kpi_exc.set_value("—")
+            self.kpi_net.set_value("—")
+            self.kpi_area.set_value(area_str)
+            self.kpi_pav.set_value(long_str)
+            self.kpi_avg.set_value("—", delta_suffix="vs semana pasada")
+            self._render_flights_empty()
+            self._render_bar_chart_empty()
+            self._render_donut(0, 0, 0)
             self._render_basemap(None)
             self._render_equipos_real()
+            self._render_frentes()
             return
 
         # Datos reales del registro
@@ -315,10 +287,8 @@ class DashboardView(ctk.CTkFrame):
                                delta_up=False)
         self.kpi_net.set_value(f"{neto:,.0f} m³",
                                "↑ 0.0%", delta_up=neto >= 0)
-        self.kpi_area.set_value(f"{cfg.get('area_ha', 45.6)} ha",
-                                "↑ —")
-        self.kpi_pav.set_value(f"{cfg.get('long_pavimento_km', 2.45)} km",
-                               "↑ —")
+        self.kpi_area.set_value(area_str, "↑ —")
+        self.kpi_pav.set_value(long_str, "↑ —")
         obj = cfg.get("vol_corte_objetivo", 0) or 0
         if obj:
             pct = float(ult.get("vol_corte_acum", 0)) / obj * 100
@@ -333,6 +303,7 @@ class DashboardView(ctk.CTkFrame):
         self._render_donut(corte, relleno, neto)
         self._render_basemap(ult["fecha"].strftime("%Y-%m-%d"))
         self._render_equipos_real()
+        self._render_frentes()
 
     # ── Basemap (hillshade + heatmap cortes/llenos) ─────────────────────
     def _render_basemap(self, fecha):
@@ -383,23 +354,14 @@ class DashboardView(ctk.CTkFrame):
         curr = float(df.iloc[-1][col])
         return f"↑ {(curr - prev) / prev * 100:+.1f}%"
 
-    def _render_flights_demo(self):
+    def _render_flights_empty(self):
         for w in self.vuelos_holder.winfo_children():
             w.destroy()
-        table = DataTable(
+        ctk.CTkLabel(
             self.vuelos_holder,
-            columns=["Fecha", "Área", "GSD", "Estado"],
-            widths=[110, 70, 60, 90],
-        )
-        table.pack(fill="x")
-        for fecha, area, gsd in VUELOS_DEMO:
-            badge = StatusBadge(table, "Procesado", kind="ok")
-            table.add_row([f"✈ {fecha}", area, gsd, badge])
-        ctk.CTkButton(
-            self.vuelos_holder, text="Ver todos los vuelos",
-            fg_color="transparent", text_color=T.PRIMARY,
-            hover_color=T.HOVER_BG, font=T.FONT_SMALL,
-        ).pack(pady=(8, 0))
+            text="Sin vuelos procesados",
+            font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+        ).pack(anchor="w", pady=14)
 
     def _render_flights(self, df):
         for w in self.vuelos_holder.winfo_children():
@@ -422,8 +384,13 @@ class DashboardView(ctk.CTkFrame):
             hover_color=T.HOVER_BG, font=T.FONT_SMALL,
         ).pack(pady=(8, 0))
 
-    def _render_bar_chart_demo(self):
-        self._draw_bar_chart(BAR_DEMO_LABELS, BAR_DEMO_EXC, BAR_DEMO_TER)
+    def _render_bar_chart_empty(self):
+        self._clear_canvas("bar")
+        ctk.CTkLabel(
+            self.bar_holder,
+            text="Sin datos de volúmenes",
+            font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+        ).pack(anchor="center", pady=30)
 
     def _render_bar_chart(self, df):
         df = df.tail(7)
@@ -525,26 +492,32 @@ class DashboardView(ctk.CTkFrame):
         for w in target.winfo_children():
             w.destroy()
 
-    # ── Tabla unificada de equipos (demo) ────────────────────────────────
-    def _render_equipos_demo(self):
-        for w in self.eq_holder.winfo_children():
+    # ── Volumen por frente (datos reales) ───────────────────────────────
+    def _render_frentes(self):
+        for w in self.fr_box.winfo_children():
             w.destroy()
-        tbl = DataTable(
-            self.eq_holder,
-            columns=["Equipo", "Tipo", "Frente", "Estado",
-                     "Horas", "Producción", "Rendimiento"],
-            widths=[110, 110, 90, 80, 70, 90, 100],
+        resultados = self.state.load_frentes_resultado()
+        total_row = next((r for r in resultados if r.get("nombre") == "TOTAL"), None)
+        datos = [r for r in resultados if r.get("nombre") != "TOTAL"]
+        if not datos:
+            frentes = self.state.load_frentes()
+            datos = frentes
+        if not datos:
+            ctk.CTkLabel(
+                self.fr_box, text="Sin frentes definidos",
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+            ).pack(anchor="w", pady=10)
+            return
+        # Denominador: corte total del proyecto (fila TOTAL si existe)
+        total_corte = float(total_row.get("corte_m3", 0)) if total_row else sum(
+            float(r.get("corte_m3", 0)) for r in datos
         )
-        tbl.pack(fill="x")
-        for nombre, tipo, frente, horas, prod, rend, up in EQUIPOS_DEMO:
-            arrow = "↗" if up else "↘"
-            color = T.SUCCESS if up else T.DANGER
-            rend_lbl = ctk.CTkLabel(
-                tbl, text=f"{rend}  {arrow}", anchor="w",
-                font=T.FONT_BODY, text_color=color,
-            )
-            badge = StatusBadge(tbl, "Activo", kind="ok")
-            tbl.add_row([nombre, tipo, frente, badge, horas, prod, rend_lbl])
+        for fr in datos:
+            nombre = str(fr.get("nombre", "Frente"))
+            corte = float(fr.get("corte_m3", 0))
+            pct = (corte / total_corte * 100) if total_corte > 0 else 0.0
+            ProgressItem(self.fr_box, nombre, pct,
+                         color=T.PRIMARY).pack(fill="x")
 
     # ── Tabla unificada de equipos (datos reales) ────────────────────────
     def _render_equipos_real(self):
@@ -556,15 +529,22 @@ class DashboardView(ctk.CTkFrame):
             equipos_data = self.state.load_equipos_data()
             df_reg = self.state.load_registros_equipos()
         except Exception:
-            self._render_equipos_demo()
+            for w in self.eq_holder.winfo_children():
+                w.destroy()
+            ctk.CTkLabel(self.eq_holder, text="Sin equipos registrados",
+                         font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+                         ).pack(anchor="w", pady=14)
             return
 
         equipos_list = equipos_data.get("equipos", [])
         flotas = equipos_data.get("flotas", [])
 
-        # Si no hay equipos registrados, mostrar demo
         if not equipos_list:
-            self._render_equipos_demo()
+            for w in self.eq_holder.winfo_children():
+                w.destroy()
+            ctk.CTkLabel(self.eq_holder, text="Sin equipos registrados",
+                         font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+                         ).pack(anchor="w", pady=14)
             return
 
         # Mapa equipo_id → flota

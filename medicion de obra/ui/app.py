@@ -27,11 +27,11 @@ NAV = [
 class App(ctk.CTk):
     def __init__(self, base: Path):
         super().__init__()
-        ctk.set_appearance_mode("dark")
+        ctk.set_appearance_mode("light")
         ctk.set_default_color_theme("blue")
 
         self.state_ = ProjectState(base)
-        self.title("Medición de Volúmenes — Obras Viales")
+        self.title("TELLUS — Medición de Volúmenes en Obras Viales")
         self.geometry("1280x780")
         self.minsize(1100, 680)
 
@@ -53,7 +53,7 @@ class App(ctk.CTk):
         side.grid_propagate(False)
 
         # Branding
-        brand = ctk.CTkLabel(side, text="VolumenView",
+        brand = ctk.CTkLabel(side, text="TELLUS",
                               font=(T.FONT_FAMILY, 18, "bold"),
                               text_color=T.TEXT, anchor="w")
         brand.pack(fill="x", padx=22, pady=(22, 0))
@@ -77,7 +77,7 @@ class App(ctk.CTk):
         # Pie de sidebar
         footer = ctk.CTkFrame(side, fg_color="transparent")
         footer.pack(side="bottom", fill="x", padx=14, pady=14)
-        self.tema_var = ctk.StringVar(value="Oscuro")
+        self.tema_var = ctk.StringVar(value="Claro")
         ctk.CTkOptionMenu(
             footer, values=["Oscuro", "Claro", "Sistema"],
             variable=self.tema_var, command=self._cambiar_tema,
@@ -122,7 +122,7 @@ class App(ctk.CTk):
             return EquiposView(self.main, self.state_,
                                on_updated=self._refresh_all)
         if key == "dron":
-            return VolumenesView(self.main, self.state_)
+            return VolumenesView(self.main, self.state_, on_updated=self._refresh_all)
         if key == "reportes":
             return ReportesView(self.main, self.state_)
         if key == "config":

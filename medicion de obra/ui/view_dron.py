@@ -26,9 +26,10 @@ def _fmt_vol(v: float) -> str:
 # Vista principal
 # ═══════════════════════════════════════════════════════════════════════════
 class VolumenesView(ctk.CTkFrame):
-    def __init__(self, master, state: ProjectState):
+    def __init__(self, master, state: ProjectState, on_updated=None):
         super().__init__(master, fg_color=T.APP_BG)
         self.state = state
+        self.on_updated = on_updated
         self._build()
         self.refresh()
 
@@ -37,8 +38,7 @@ class VolumenesView(ctk.CTkFrame):
         self.scroll = ctk.CTkScrollableFrame(self, fg_color=T.APP_BG)
         self.scroll.pack(fill="both", expand=True)
         self._build_header()
-        self._build_upload_section()
-        self._build_status_section()
+        self._build_insumos_collapsible()
         self._build_frentes_section()
         self._build_resultados_section()
 
@@ -55,55 +55,87 @@ class VolumenesView(ctk.CTkFrame):
             wraplength=860,
         ).pack(anchor="w")
 
-    # ── Tarjetas de carga ────────────────────────────────────────────────
-    def _build_upload_section(self):
-        card = Card(self.scroll, title="Insumos base del proyecto", light=True)
-        card.pack(fill="x", padx=20, pady=(0, 16))
+    # ── Insumos: sección colapsable ──────────────────────────────────────
+    def _build_insumos_collapsible(self):
+        self._collapsed_insumos = False
+        outer = Card(self.scroll, light=True)
+        outer.pack(fill="x", padx=20, pady=(0, 16))
+
+        # ── Cabecera siempre visible ───────────────────────────────────
+        hdr = ctk.CTkFrame(outer, fg_color="transparent")
+        hdr.pack(fill="x", padx=18, pady=(10, 4))
 
         ctk.CTkLabel(
-            card,
+            hdr, text="Insumos base del proyecto",
+            font=T.FONT_H2, text_color=T.TEXT, anchor="w",
+        ).pack(side="left")
+
+        self._toggle_btn = ctk.CTkButton(
+            hdr, text="▲  Contraer", width=120, height=28,
+            font=T.FONT_SMALL,
+            fg_color="transparent", hover_color=T.HOVER_BG,
+            text_color=T.TEXT_MUTED, border_width=1, border_color=T.CARD_BORDER,
+            command=self._toggle_insumos,
+        )
+        self._toggle_btn.pack(side="right", padx=(8, 0))
+
+        # Chips compactos de estado (en el header, siempre visibles)
+        self._compact_row = ctk.CTkFrame(hdr, fg_color="transparent")
+        self._compact_row.pack(side="right", padx=(0, 6))
+
+        # ── Cuerpo colapsable ──────────────────────────────────────────
+        self._insumos_body = ctk.CTkFrame(outer, fg_color="transparent")
+        self._insumos_body.pack(fill="x")
+
+        ctk.CTkLabel(
+            self._insumos_body,
             text=("Haz clic en cada tarjeta para seleccionar el archivo. "
                   "Se copiarán automáticamente a la carpeta baseline/ del proyecto."),
             font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
             wraplength=860,
-        ).pack(anchor="w", padx=18, pady=(0, 16))
+        ).pack(anchor="w", padx=18, pady=(2, 14))
 
-        row = ctk.CTkFrame(card, fg_color="transparent")
-        row.pack(padx=18, pady=(0, 22))
+        cards_row = ctk.CTkFrame(self._insumos_body, fg_color="transparent")
+        cards_row.pack(padx=18, pady=(0, 18))
 
         self._card_dem_ini = UploadCard(
-            row, 1, "DEM Inicial",
+            cards_row, 1, "DEM Inicial",
             "Terreno natural  (GeoTIFF / .tif)",
             on_upload=self._upload_dem_ini,
-            icon="🏔️",
+            icon="📂",
         )
         self._card_dem_ini.grid(row=0, column=0, padx=14, pady=6)
 
         self._card_eje = UploadCard(
-            row, 2, "Eje de la Vía",
+            cards_row, 2, "Eje de la Vía",
             "Geometría del corredor  (DXF)",
             on_upload=self._upload_eje,
-            icon="🛣️",
+            icon="📂",
         )
         self._card_eje.grid(row=0, column=1, padx=14, pady=6)
 
         self._card_dem_final = UploadCard(
-            row, 3, "DEM Final",
+            cards_row, 3, "DEM Final",
             "Volumen objetivo del proyecto  (.tif)",
             on_upload=self._upload_dem_final,
-            icon="🎯",
+            icon="📂",
         )
         self._card_dem_final.grid(row=0, column=2, padx=14, pady=6)
 
-    # ── Estado de insumos ────────────────────────────────────────────────
-    def _build_status_section(self):
-        self._status_card = Card(
-            self.scroll, title="Estado de los insumos", light=True)
-        self._status_card.pack(fill="x", padx=20, pady=(0, 16))
-        self._status_body = ctk.CTkFrame(
-            self._status_card, fg_color="transparent")
-        self._status_body.pack(fill="x", padx=18, pady=(0, 16))
+        # Separador + estado detallado
+        ctk.CTkFrame(self._insumos_body, height=1,
+                     fg_color=T.CARD_BORDER).pack(fill="x", padx=18, pady=(0, 10))
 
+        ctk.CTkLabel(
+            self._insumos_body, text="Estado de los insumos",
+            font=(T.FONT_FAMILY, 11, "bold"),
+            text_color=T.TEXT_MUTED, anchor="w",
+        ).pack(anchor="w", padx=18, pady=(0, 4))
+
+        self._status_body = ctk.CTkFrame(self._insumos_body, fg_color="transparent")
+        self._status_body.pack(fill="x", padx=18, pady=(0, 14))
+
+        # Botón calcular (fuera del colapsable, siempre visible)
         btn_row = ctk.CTkFrame(self.scroll, fg_color="transparent")
         btn_row.pack(fill="x", padx=20, pady=(0, 20))
         self.btn_calc = ctk.CTkButton(
@@ -116,6 +148,15 @@ class VolumenesView(ctk.CTkFrame):
             state="disabled",
         )
         self.btn_calc.pack(side="right")
+
+    def _toggle_insumos(self):
+        self._collapsed_insumos = not self._collapsed_insumos
+        if self._collapsed_insumos:
+            self._insumos_body.pack_forget()
+            self._toggle_btn.configure(text="▼  Expandir")
+        else:
+            self._insumos_body.pack(fill="x")
+            self._toggle_btn.configure(text="▲  Contraer")
 
     # ── Frentes de obra ──────────────────────────────────────────────────
     def _build_frentes_section(self):
@@ -264,21 +305,36 @@ class VolumenesView(ctk.CTkFrame):
     def _refresh_status(self):
         for w in self._status_body.winfo_children():
             w.destroy()
+        for w in self._compact_row.winfo_children():
+            w.destroy()
 
         dem_ini   = self.state.dem_baseline_path()
         eje       = self._eje_path()
         dem_final = self._dem_final_path()
 
         items = [
-            ("DEM Inicial",   "dem_baseline.tif", dem_ini),
-            ("Eje de la Vía", "eje_via.dxf",      eje),
-            ("DEM Final",     "dem_final.tif",     dem_final),
+            ("DEM Ini",       "DEM Inicial",   "dem_baseline.tif", dem_ini),
+            ("Eje",           "Eje de la Vía", "eje_via.dxf",      eje),
+            ("DEM Final",     "DEM Final",     "dem_final.tif",     dem_final),
         ]
         all_ok = True
-        for nombre, archivo, path in items:
+        for short, nombre, archivo, path in items:
             ok = path is not None
             if not ok:
                 all_ok = False
+
+            # Chip compacto en el header
+            chip_bg = "#E7F7EE" if ok else "#FEE2E2"
+            chip_fg = "#10B981" if ok else "#EF4444"
+            dot = "●" if ok else "○"
+            ctk.CTkLabel(
+                self._compact_row,
+                text=f"  {dot} {short}  ",
+                font=T.FONT_TINY,
+                corner_radius=8, fg_color=chip_bg, text_color=chip_fg,
+            ).pack(side="left", padx=3)
+
+            # Fila detallada en el cuerpo colapsable
             row = ctk.CTkFrame(self._status_body, fg_color="transparent")
             row.pack(fill="x", pady=5)
             StatusBadge(row, "Cargado" if ok else "Falta",
@@ -300,6 +356,8 @@ class VolumenesView(ctk.CTkFrame):
         dem_ini   = self.state.dem_baseline_path()
         eje       = self._eje_path()
         dem_final = self._dem_final_path()
+        for card in (self._card_dem_ini, self._card_eje, self._card_dem_final):
+            card.refresh_theme()
         self._card_dem_ini.set_loaded(dem_ini)
         self._card_eje.set_loaded(eje)
         self._card_dem_final.set_loaded(dem_final)
@@ -417,6 +475,8 @@ class VolumenesView(ctk.CTkFrame):
         self._ent_abs_ini.delete(0, "end")
         self._ent_abs_fin.delete(0, "end")
         self._refresh_frentes_ui()
+        if self.on_updated:
+            self.on_updated()
 
     def _remove_frente(self, idx: int):
         frentes = self.state.load_frentes()
@@ -424,6 +484,8 @@ class VolumenesView(ctk.CTkFrame):
             frentes.pop(idx)
             self.state.save_frentes(frentes)
             self._refresh_frentes_ui()
+            if self.on_updated:
+                self.on_updated()
 
     # ── Resultados ───────────────────────────────────────────────────────
     def _refresh_resultados(self, ok: bool = True):
@@ -537,10 +599,15 @@ class VolumenesView(ctk.CTkFrame):
             )
             return
 
+        def _on_done(ok):
+            self.after(0, self._refresh_resultados, ok)
+            if ok and self.on_updated:
+                self.after(200, self.on_updated)
+
         from .runner import ProcessDialog
         ProcessDialog(
             self.winfo_toplevel(),
             titulo="Calculando Volúmenes por Frente",
             popen_factory=self.state.run_volumen_frentes,
-            on_done=lambda ok: self.after(0, self._refresh_resultados, ok),
+            on_done=_on_done,
         )
