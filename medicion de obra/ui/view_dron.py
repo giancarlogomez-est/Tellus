@@ -1,15 +1,14 @@
-"""Vista 'Volúmenes': insumos base, frentes de obra y cálculo de ΔZ."""
+"""Vista 'Volúmenes': frentes de obra y cálculo de ΔZ."""
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import messagebox
 
 import customtkinter as ctk
 
 from . import theme as T
 from .state import ProjectState
-from .widgets import Card, SectionTitle, StatusBadge, UploadCard
+from .widgets import Card, SectionTitle
 
 
 # ── Helper ────────────────────────────────────────────────────────────────
@@ -38,7 +37,6 @@ class VolumenesView(ctk.CTkFrame):
         self.scroll = ctk.CTkScrollableFrame(self, fg_color=T.APP_BG)
         self.scroll.pack(fill="both", expand=True)
         self._build_header()
-        self._build_insumos_collapsible()
         self._build_frentes_section()
         self._build_resultados_section()
 
@@ -49,114 +47,10 @@ class VolumenesView(ctk.CTkFrame):
         SectionTitle(hdr, text="Volúmenes", text_color=T.TEXT).pack(anchor="w")
         ctk.CTkLabel(
             hdr, font=T.FONT_BODY, text_color=T.TEXT_MUTED, anchor="w",
-            text=("Carga los insumos base del proyecto. A partir del DEM inicial, "
-                  "el eje de la vía y el DEM final se calcularán los ΔZ y volúmenes "
+            text=("Define los frentes de obra y calcula los ΔZ y volúmenes "
                   "de corte/relleno por abscisa."),
             wraplength=860,
         ).pack(anchor="w")
-
-    # ── Insumos: sección colapsable ──────────────────────────────────────
-    def _build_insumos_collapsible(self):
-        self._collapsed_insumos = False
-        outer = Card(self.scroll, light=True)
-        outer.pack(fill="x", padx=20, pady=(0, 16))
-
-        # ── Cabecera siempre visible ───────────────────────────────────
-        hdr = ctk.CTkFrame(outer, fg_color="transparent")
-        hdr.pack(fill="x", padx=18, pady=(10, 4))
-
-        ctk.CTkLabel(
-            hdr, text="Insumos base del proyecto",
-            font=T.FONT_H2, text_color=T.TEXT, anchor="w",
-        ).pack(side="left")
-
-        self._toggle_btn = ctk.CTkButton(
-            hdr, text="▲  Contraer", width=120, height=28,
-            font=T.FONT_SMALL,
-            fg_color="transparent", hover_color=T.HOVER_BG,
-            text_color=T.TEXT_MUTED, border_width=1, border_color=T.CARD_BORDER,
-            command=self._toggle_insumos,
-        )
-        self._toggle_btn.pack(side="right", padx=(8, 0))
-
-        # Chips compactos de estado (en el header, siempre visibles)
-        self._compact_row = ctk.CTkFrame(hdr, fg_color="transparent")
-        self._compact_row.pack(side="right", padx=(0, 6))
-
-        # ── Cuerpo colapsable ──────────────────────────────────────────
-        self._insumos_body = ctk.CTkFrame(outer, fg_color="transparent")
-        self._insumos_body.pack(fill="x")
-
-        ctk.CTkLabel(
-            self._insumos_body,
-            text=("Haz clic en cada tarjeta para seleccionar el archivo. "
-                  "Se copiarán automáticamente a la carpeta baseline/ del proyecto."),
-            font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
-            wraplength=860,
-        ).pack(anchor="w", padx=18, pady=(2, 14))
-
-        cards_row = ctk.CTkFrame(self._insumos_body, fg_color="transparent")
-        cards_row.pack(padx=18, pady=(0, 18))
-
-        self._card_dem_ini = UploadCard(
-            cards_row, 1, "DEM Inicial",
-            "Terreno natural  (GeoTIFF / .tif)",
-            on_upload=self._upload_dem_ini,
-            icon="📂",
-        )
-        self._card_dem_ini.grid(row=0, column=0, padx=14, pady=6)
-
-        self._card_eje = UploadCard(
-            cards_row, 2, "Eje de la Vía",
-            "Geometría del corredor  (DXF)",
-            on_upload=self._upload_eje,
-            icon="📂",
-        )
-        self._card_eje.grid(row=0, column=1, padx=14, pady=6)
-
-        self._card_dem_final = UploadCard(
-            cards_row, 3, "DEM Final",
-            "Volumen objetivo del proyecto  (.tif)",
-            on_upload=self._upload_dem_final,
-            icon="📂",
-        )
-        self._card_dem_final.grid(row=0, column=2, padx=14, pady=6)
-
-        # Separador + estado detallado
-        ctk.CTkFrame(self._insumos_body, height=1,
-                     fg_color=T.CARD_BORDER).pack(fill="x", padx=18, pady=(0, 10))
-
-        ctk.CTkLabel(
-            self._insumos_body, text="Estado de los insumos",
-            font=(T.FONT_FAMILY, 11, "bold"),
-            text_color=T.TEXT_MUTED, anchor="w",
-        ).pack(anchor="w", padx=18, pady=(0, 4))
-
-        self._status_body = ctk.CTkFrame(self._insumos_body, fg_color="transparent")
-        self._status_body.pack(fill="x", padx=18, pady=(0, 14))
-
-        # Botón calcular (fuera del colapsable, siempre visible)
-        btn_row = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        btn_row.pack(fill="x", padx=20, pady=(0, 20))
-        self.btn_calc = ctk.CTkButton(
-            btn_row, text="▶  Calcular Volúmenes ΔZ",
-            height=44, width=260,
-            font=T.FONT_H2,
-            fg_color=T.PRIMARY, hover_color=T.PRIMARY_HOV,
-            text_color=T.TEXT_ON_DARK,
-            command=self._calcular,
-            state="disabled",
-        )
-        self.btn_calc.pack(side="right")
-
-    def _toggle_insumos(self):
-        self._collapsed_insumos = not self._collapsed_insumos
-        if self._collapsed_insumos:
-            self._insumos_body.pack_forget()
-            self._toggle_btn.configure(text="▼  Expandir")
-        else:
-            self._insumos_body.pack(fill="x")
-            self._toggle_btn.configure(text="▲  Contraer")
 
     # ── Frentes de obra ──────────────────────────────────────────────────
     def _build_frentes_section(self):
@@ -235,61 +129,7 @@ class VolumenesView(ctk.CTkFrame):
         self._res_body.pack(fill="x", padx=18, pady=(0, 16))
         self._refresh_resultados()
 
-    # ── Upload handlers ──────────────────────────────────────────────────
-    def _upload_dem_ini(self):
-        path = filedialog.askopenfilename(
-            title="Seleccionar DEM Inicial",
-            filetypes=[("GeoTIFF", "*.tif *.tiff *.TIF *.TIFF"),
-                       ("Todos los archivos", "*.*")],
-        )
-        if not path:
-            return
-        try:
-            dest = self._ensure_baseline() / "dem_baseline.tif"
-            shutil.copy2(path, dest)
-            self._card_dem_ini.set_loaded(dest)
-            self._refresh_status()
-        except Exception as exc:
-            messagebox.showerror("Error al copiar archivo", str(exc))
-
-    def _upload_eje(self):
-        path = filedialog.askopenfilename(
-            title="Seleccionar eje de la vía",
-            filetypes=[("AutoCAD DXF", "*.dxf *.DXF"),
-                       ("Todos los archivos", "*.*")],
-        )
-        if not path:
-            return
-        try:
-            dest = self._ensure_baseline() / "eje_via.dxf"
-            shutil.copy2(path, dest)
-            self._card_eje.set_loaded(dest)
-            self._refresh_status()
-        except Exception as exc:
-            messagebox.showerror("Error al copiar archivo", str(exc))
-
-    def _upload_dem_final(self):
-        path = filedialog.askopenfilename(
-            title="Seleccionar DEM Final (volumen objetivo)",
-            filetypes=[("GeoTIFF", "*.tif *.tiff *.TIF *.TIFF"),
-                       ("Todos los archivos", "*.*")],
-        )
-        if not path:
-            return
-        try:
-            dest = self._ensure_baseline() / "dem_final.tif"
-            shutil.copy2(path, dest)
-            self._card_dem_final.set_loaded(dest)
-            self._refresh_status()
-        except Exception as exc:
-            messagebox.showerror("Error al copiar archivo", str(exc))
-
     # ── Rutas de archivos ────────────────────────────────────────────────
-    def _ensure_baseline(self) -> Path:
-        d = self.state.baseline_dir
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-
     def _eje_path(self) -> Path | None:
         bd = self.state.baseline_dir
         for ext in ("dxf", "DXF", "dwg", "DWG"):
@@ -301,67 +141,8 @@ class VolumenesView(ctk.CTkFrame):
     def _dem_final_path(self) -> Path | None:
         return self.state.dem_final_path()
 
-    # ── Refresco de estado ───────────────────────────────────────────────
-    def _refresh_status(self):
-        for w in self._status_body.winfo_children():
-            w.destroy()
-        for w in self._compact_row.winfo_children():
-            w.destroy()
-
-        dem_ini   = self.state.dem_baseline_path()
-        eje       = self._eje_path()
-        dem_final = self._dem_final_path()
-
-        items = [
-            ("DEM Ini",       "DEM Inicial",   "dem_baseline.tif", dem_ini),
-            ("Eje",           "Eje de la Vía", "eje_via.dxf",      eje),
-            ("DEM Final",     "DEM Final",     "dem_final.tif",     dem_final),
-        ]
-        all_ok = True
-        for short, nombre, archivo, path in items:
-            ok = path is not None
-            if not ok:
-                all_ok = False
-
-            # Chip compacto en el header
-            chip_bg = "#E7F7EE" if ok else "#FEE2E2"
-            chip_fg = "#10B981" if ok else "#EF4444"
-            dot = "●" if ok else "○"
-            ctk.CTkLabel(
-                self._compact_row,
-                text=f"  {dot} {short}  ",
-                font=T.FONT_TINY,
-                corner_radius=8, fg_color=chip_bg, text_color=chip_fg,
-            ).pack(side="left", padx=3)
-
-            # Fila detallada en el cuerpo colapsable
-            row = ctk.CTkFrame(self._status_body, fg_color="transparent")
-            row.pack(fill="x", pady=5)
-            StatusBadge(row, "Cargado" if ok else "Falta",
-                        kind="ok" if ok else "err").pack(side="left")
-            ctk.CTkLabel(
-                row, text=f"  {nombre}",
-                font=(T.FONT_FAMILY, 12, "bold"),
-                text_color=T.TEXT, anchor="w",
-            ).pack(side="left", padx=(4, 6))
-            ctk.CTkLabel(
-                row,
-                text=f"({archivo})" if not ok else str(path),
-                font=T.FONT_TINY, text_color=T.TEXT_MUTED, anchor="w",
-            ).pack(side="left")
-
-        self.btn_calc.configure(state="normal" if all_ok else "disabled")
-
     def refresh(self):
-        dem_ini   = self.state.dem_baseline_path()
-        eje       = self._eje_path()
-        dem_final = self._dem_final_path()
-        for card in (self._card_dem_ini, self._card_eje, self._card_dem_final):
-            card.refresh_theme()
-        self._card_dem_ini.set_loaded(dem_ini)
-        self._card_eje.set_loaded(eje)
-        self._card_dem_final.set_loaded(dem_final)
-        self._refresh_status()
+        pass
 
     # ── Frentes: lista dinámica ──────────────────────────────────────────
     def _refresh_frentes_ui(self):
@@ -573,14 +354,6 @@ class VolumenesView(ctk.CTkFrame):
                 ).grid(row=0, column=col_i, sticky="w", padx=4, pady=6)
 
     # ── Acciones ─────────────────────────────────────────────────────────
-    def _calcular(self):
-        from .runner import ProcessDialog
-        ProcessDialog(
-            self.winfo_toplevel(),
-            titulo="Calculando Volúmenes ΔZ",
-            popen_factory=self.state.run_odm,
-        )
-
     def _recalcular_frentes(self):
         if not all([self.state.dem_baseline_path(),
                     self._eje_path(),

@@ -1,13 +1,15 @@
 """Vista 'Vuelo diario': carga DEMs y ejecuta el pipeline."""
 from __future__ import annotations
 
+import shutil
 from datetime import date
+from pathlib import Path
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 
 from . import theme as T
 from .state import ProjectState
-from .widgets import SectionTitle, Card, Pill, UploadCard
+from .widgets import SectionTitle, Card, Pill, StatusBadge, UploadCard
 from .runner import ProcessDialog
 
 
@@ -65,7 +67,7 @@ class _DEMRow(ctk.CTkFrame):
     """Fila seleccionable que representa un DEM disponible."""
 
     def __init__(self, master, fecha: str, procesado: bool,
-                 selected: bool = False, on_select=None, **kw):
+                 selected: bool = False, on_select=None, on_delete=None, **kw):
         super().__init__(master, corner_radius=8, border_width=1,
                          border_color=T.PRIMARY if selected else T.CARD_BORDER,
                          fg_color=("#EFF6FF", "#1E3A5F") if selected else T.CARD_BG,
@@ -104,7 +106,18 @@ class _DEMRow(ctk.CTkFrame):
         ctk.CTkLabel(inner, text="dsm.tif",
                      font=T.FONT_SMALL, text_color=T.TEXT_FAINT).pack(side="left")
 
-        # Bind clics en todos los widgets hijos
+        # Botón eliminar (solo para DEMs procesados)
+        if procesado and on_delete:
+            ctk.CTkButton(
+                inner, text="✕", width=28, height=26,
+                fg_color="transparent",
+                hover_color=("#FEE2E2", "#7F1D1D"),
+                text_color=T.DANGER,
+                font=(T.FONT_FAMILY, 11, "bold"),
+                command=lambda: on_delete(fecha),
+            ).pack(side="right", padx=(0, 2))
+
+        # Bind clics en todos los widgets hijos (excepto el botón de borrar)
         for w in (self, inner, self._dot, self._lbl_fecha):
             w.bind("<Button-1>", self._clicked)
 
@@ -144,12 +157,44 @@ class DiarioView(ctk.CTkFrame):
                      text="Sube el DEM de cada vuelo y selecciona cuál procesar.",
                      anchor="w").pack(anchor="w", padx=24, pady=(0, 14))
 
-        # ── Tarjeta: cargar DEM ──────────────────────────────────────────
-        up_card = Card(self, title="Cargar DEM diario")
+        self._build_insumos_base()
+
+        # ── Tarjeta: cargar DEM (colapsable) ────────────────────────────
+        self._dem_collapsed = False
+        up_card = Card(self)
         up_card.pack(fill="x", padx=20, pady=(0, 14))
 
-        up_inner = ctk.CTkFrame(up_card, fg_color="transparent")
-        up_inner.pack(padx=18, pady=(0, 18))
+        # Cabecera siempre visible
+        up_hdr = ctk.CTkFrame(up_card, fg_color="transparent")
+        up_hdr.pack(fill="x", padx=18, pady=(10, 4))
+
+        ctk.CTkLabel(
+            up_hdr, text="Cargar DEM diario",
+            font=T.FONT_H2, text_color=T.TEXT, anchor="w",
+        ).pack(side="left")
+
+        self._dem_toggle_btn = ctk.CTkButton(
+            up_hdr, text="▲  Contraer", width=120, height=28,
+            font=T.FONT_SMALL,
+            fg_color="transparent", hover_color=T.HOVER_BG,
+            text_color=T.TEXT_MUTED, border_width=1, border_color=T.CARD_BORDER,
+            command=self._toggle_dem_card,
+        )
+        self._dem_toggle_btn.pack(side="right", padx=(8, 0))
+
+        # Chip compacto de estado (siempre visible)
+        self._dem_compact_chip = ctk.CTkLabel(
+            up_hdr, text="", font=T.FONT_TINY,
+            corner_radius=8, fg_color="transparent",
+        )
+        self._dem_compact_chip.pack(side="right", padx=(0, 6))
+
+        # Cuerpo colapsable
+        self._dem_body = ctk.CTkFrame(up_card, fg_color="transparent")
+        self._dem_body.pack(fill="x")
+
+        up_inner = ctk.CTkFrame(self._dem_body, fg_color="transparent")
+        up_inner.pack(padx=18, pady=(2, 18))
 
         self._upload_card_dem = UploadCard(
             up_inner, 0, "DEM Diario",
@@ -236,34 +281,281 @@ class DiarioView(ctk.CTkFrame):
         )
         self.btn_ejec.pack(side="right")
 
-        self.btn_demo = ctk.CTkButton(
-            bar, text="Generar serie de 7 días (demo)",
-            height=44, width=240,
-            fg_color="transparent", border_width=1,
-            border_color=T.PRIMARY, text_color=T.PRIMARY,
-            hover_color=T.HOVER_BG, command=self._generar_demo,
-        )
-        self.btn_demo.pack(side="right", padx=(0, 10))
-
         # Pill de estado del vuelo seleccionado
         self.pill_estado = Pill(bar, "Ningún vuelo seleccionado", color=T.TEXT_MUTED)
         self.pill_estado.pack(side="left")
+
+    # ── Insumos base del proyecto ────────────────────────────────────────────
+
+    def _build_insumos_base(self):
+        self._collapsed_insumos = False
+        outer = Card(self, light=True)
+        outer.pack(fill="x", padx=20, pady=(0, 16))
+
+        hdr = ctk.CTkFrame(outer, fg_color="transparent")
+        hdr.pack(fill="x", padx=18, pady=(10, 4))
+
+        ctk.CTkLabel(
+            hdr, text="Insumos base del proyecto",
+            font=T.FONT_H2, text_color=T.TEXT, anchor="w",
+        ).pack(side="left")
+
+        self._toggle_btn_insumos = ctk.CTkButton(
+            hdr, text="▲  Contraer", width=120, height=28,
+            font=T.FONT_SMALL,
+            fg_color="transparent", hover_color=T.HOVER_BG,
+            text_color=T.TEXT_MUTED, border_width=1, border_color=T.CARD_BORDER,
+            command=self._toggle_insumos,
+        )
+        self._toggle_btn_insumos.pack(side="right", padx=(8, 0))
+
+        self._compact_row = ctk.CTkFrame(hdr, fg_color="transparent")
+        self._compact_row.pack(side="right", padx=(0, 6))
+
+        self._insumos_body = ctk.CTkFrame(outer, fg_color="transparent")
+        self._insumos_body.pack(fill="x")
+
+        ctk.CTkLabel(
+            self._insumos_body,
+            text=("Haz clic en cada tarjeta para seleccionar el archivo. "
+                  "Se copiarán automáticamente a la carpeta baseline/ del proyecto."),
+            font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
+            wraplength=860,
+        ).pack(anchor="w", padx=18, pady=(2, 14))
+
+        cards_row = ctk.CTkFrame(self._insumos_body, fg_color="transparent")
+        cards_row.pack(padx=18, pady=(0, 18))
+
+        self._card_dem_ini = UploadCard(
+            cards_row, 1, "DEM Inicial",
+            "Terreno natural  (GeoTIFF / .tif)",
+            on_upload=self._upload_dem_ini,
+            icon="📂",
+        )
+        self._card_dem_ini.grid(row=0, column=0, padx=14, pady=6)
+
+        self._card_eje = UploadCard(
+            cards_row, 2, "Eje de la Vía",
+            "Geometría del corredor  (DXF)",
+            on_upload=self._upload_eje,
+            icon="📂",
+        )
+        self._card_eje.grid(row=0, column=1, padx=14, pady=6)
+
+        self._card_dem_final = UploadCard(
+            cards_row, 3, "DEM Final",
+            "Volumen objetivo del proyecto  (.tif)",
+            on_upload=self._upload_dem_final,
+            icon="📂",
+        )
+        self._card_dem_final.grid(row=0, column=2, padx=14, pady=6)
+
+        ctk.CTkFrame(self._insumos_body, height=1,
+                     fg_color=T.CARD_BORDER).pack(fill="x", padx=18, pady=(0, 10))
+
+        ctk.CTkLabel(
+            self._insumos_body, text="Estado de los insumos",
+            font=(T.FONT_FAMILY, 11, "bold"),
+            text_color=T.TEXT_MUTED, anchor="w",
+        ).pack(anchor="w", padx=18, pady=(0, 4))
+
+        self._status_body = ctk.CTkFrame(self._insumos_body, fg_color="transparent")
+        self._status_body.pack(fill="x", padx=18, pady=(0, 14))
+
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.pack(fill="x", padx=20, pady=(0, 20))
+        self.btn_calc = ctk.CTkButton(
+            btn_row, text="▶  Calcular Volúmenes ΔZ",
+            height=44, width=260,
+            font=T.FONT_H2,
+            fg_color=T.PRIMARY, hover_color=T.PRIMARY_HOV,
+            text_color=T.TEXT_ON_DARK,
+            command=self._calcular_volumenes,
+            state="disabled",
+        )
+        self.btn_calc.pack(side="right")
+
+    def _toggle_insumos(self):
+        self._collapsed_insumos = not self._collapsed_insumos
+        if self._collapsed_insumos:
+            self._insumos_body.pack_forget()
+            self._toggle_btn_insumos.configure(text="▼  Expandir")
+        else:
+            self._insumos_body.pack(fill="x")
+            self._toggle_btn_insumos.configure(text="▲  Contraer")
+
+    def _upload_dem_ini(self):
+        path = filedialog.askopenfilename(
+            title="Seleccionar DEM Inicial",
+            filetypes=[("GeoTIFF", "*.tif *.tiff *.TIF *.TIFF"),
+                       ("Todos los archivos", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            dest = self._ensure_baseline() / "dem_baseline.tif"
+            shutil.copy2(path, dest)
+            self._card_dem_ini.set_loaded(dest)
+            self._refresh_insumos_status()
+        except Exception as exc:
+            messagebox.showerror("Error al copiar archivo", str(exc))
+
+    def _upload_eje(self):
+        path = filedialog.askopenfilename(
+            title="Seleccionar eje de la vía",
+            filetypes=[("AutoCAD DXF", "*.dxf *.DXF"),
+                       ("Todos los archivos", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            dest = self._ensure_baseline() / "eje_via.dxf"
+            shutil.copy2(path, dest)
+            self._card_eje.set_loaded(dest)
+            self._refresh_insumos_status()
+        except Exception as exc:
+            messagebox.showerror("Error al copiar archivo", str(exc))
+
+    def _upload_dem_final(self):
+        path = filedialog.askopenfilename(
+            title="Seleccionar DEM Final (volumen objetivo)",
+            filetypes=[("GeoTIFF", "*.tif *.tiff *.TIF *.TIFF"),
+                       ("Todos los archivos", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            dest = self._ensure_baseline() / "dem_final.tif"
+            shutil.copy2(path, dest)
+            self._card_dem_final.set_loaded(dest)
+            self._refresh_insumos_status()
+        except Exception as exc:
+            messagebox.showerror("Error al copiar archivo", str(exc))
+
+    def _ensure_baseline(self) -> Path:
+        d = self.state.baseline_dir
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _eje_path(self) -> Path | None:
+        bd = self.state.baseline_dir
+        for ext in ("dxf", "DXF", "dwg", "DWG"):
+            p = bd / f"eje_via.{ext}"
+            if p.exists():
+                return p
+        return None
+
+    def _dem_final_path(self) -> Path | None:
+        return self.state.dem_final_path()
+
+    def _refresh_insumos_status(self):
+        for w in self._status_body.winfo_children():
+            w.destroy()
+        for w in self._compact_row.winfo_children():
+            w.destroy()
+
+        dem_ini   = self.state.dem_baseline_path()
+        eje       = self._eje_path()
+        dem_final = self._dem_final_path()
+
+        items = [
+            ("DEM Ini",   "DEM Inicial",   "dem_baseline.tif", dem_ini),
+            ("Eje",       "Eje de la Vía", "eje_via.dxf",      eje),
+            ("DEM Final", "DEM Final",     "dem_final.tif",     dem_final),
+        ]
+        all_ok = True
+        for short, nombre, archivo, path in items:
+            ok = path is not None
+            if not ok:
+                all_ok = False
+
+            chip_bg = "#E7F7EE" if ok else "#FEE2E2"
+            chip_fg = "#10B981" if ok else "#EF4444"
+            dot = "●" if ok else "○"
+            ctk.CTkLabel(
+                self._compact_row,
+                text=f"  {dot} {short}  ",
+                font=T.FONT_TINY,
+                corner_radius=8, fg_color=chip_bg, text_color=chip_fg,
+            ).pack(side="left", padx=3)
+
+            row = ctk.CTkFrame(self._status_body, fg_color="transparent")
+            row.pack(fill="x", pady=5)
+            StatusBadge(row, "Cargado" if ok else "Falta",
+                        kind="ok" if ok else "err").pack(side="left")
+            ctk.CTkLabel(
+                row, text=f"  {nombre}",
+                font=(T.FONT_FAMILY, 12, "bold"),
+                text_color=T.TEXT, anchor="w",
+            ).pack(side="left", padx=(4, 6))
+            ctk.CTkLabel(
+                row,
+                text=f"({archivo})" if not ok else str(path),
+                font=T.FONT_TINY, text_color=T.TEXT_MUTED, anchor="w",
+            ).pack(side="left")
+
+        self.btn_calc.configure(state="normal" if all_ok else "disabled")
+
+    def _calcular_volumenes(self):
+        from .runner import ProcessDialog
+        ProcessDialog(
+            self.winfo_toplevel(),
+            titulo="Calculando Volúmenes ΔZ",
+            popen_factory=self.state.run_odm,
+        )
+
+    # ── Toggle cargar DEM ────────────────────────────────────────────────────
+
+    def _toggle_dem_card(self):
+        self._dem_collapsed = not self._dem_collapsed
+        if self._dem_collapsed:
+            self._dem_body.pack_forget()
+            self._dem_toggle_btn.configure(text="▼  Expandir")
+        else:
+            self._dem_body.pack(fill="x")
+            self._dem_toggle_btn.configure(text="▲  Contraer")
+
+    def _update_dem_chip(self, loaded_path):
+        if loaded_path is not None:
+            self._dem_compact_chip.configure(
+                text=f"  ● {loaded_path.name}  ",
+                fg_color="#E7F7EE", text_color="#10B981",
+            )
+        else:
+            self._dem_compact_chip.configure(
+                text="  ○ Sin DEM  ",
+                fg_color="#FEE2E2", text_color="#EF4444",
+            )
 
     # ── Estado / refresco ────────────────────────────────────────────────────
 
     def refresh(self):
         """Reconstruye la lista de DEMs desde disco."""
+        dem_ini   = self.state.dem_baseline_path()
+        eje       = self._eje_path()
+        dem_final = self._dem_final_path()
+        for card in (self._card_dem_ini, self._card_eje, self._card_dem_final):
+            card.refresh_theme()
+        self._card_dem_ini.set_loaded(dem_ini)
+        self._card_eje.set_loaded(eje)
+        self._card_dem_final.set_loaded(dem_final)
+        self._refresh_insumos_status()
+
         disponibles = self.state.vuelos_disponibles()   # ordenados asc
         procesados  = self.state.vuelos_procesados()
 
-        # Actualizar chip de la tarjeta de carga
+        # Actualizar card de carga (colores de tema + estado)
+        self._upload_card_dem.refresh_theme()
         if disponibles:
             from pathlib import Path
             ultimo = sorted(disponibles)[-1]
             p = self.state.vuelos_dir / ultimo / "dsm.tif"
-            self._upload_card_dem.set_loaded(p if p.exists() else None)
+            loaded = p if p.exists() else None
+            self._upload_card_dem.set_loaded(loaded)
+            self._update_dem_chip(loaded)
         else:
             self._upload_card_dem.set_loaded(None)
+            self._update_dem_chip(None)
 
         # Limpiar filas anteriores
         for w in list(self._rows.values()):
@@ -284,6 +576,7 @@ class DiarioView(ctk.CTkFrame):
                 procesado=(fecha in procesados),
                 selected=(fecha == self._selected_fecha),
                 on_select=self._seleccionar,
+                on_delete=self._borrar_dem,
             )
             row.pack(fill="x", pady=(0, 6))
             self._rows[fecha] = row
@@ -363,6 +656,26 @@ class DiarioView(ctk.CTkFrame):
                 + "\n".join(f"  · vuelos/{f}/dsm.tif" for f in sorted(importados)),
             )
 
+    def _borrar_dem(self, fecha: str):
+        confirmar = messagebox.askyesno(
+            "Eliminar DEM procesado",
+            f"¿Eliminar la carpeta del vuelo {fecha}?\n\n"
+            "Se borrarán el DEM y todos los archivos generados en esa fecha.\n"
+            "Esta acción no se puede deshacer.",
+            icon="warning",
+        )
+        if not confirmar:
+            return
+        try:
+            carpeta = self.state.vuelos_dir / fecha
+            shutil.rmtree(carpeta)
+        except Exception as exc:
+            messagebox.showerror("Error al eliminar", str(exc))
+            return
+        if self._selected_fecha == fecha:
+            self._selected_fecha = None
+        self.refresh()
+
     def _ejecutar(self):
         fecha = self._selected_fecha
         if not fecha:
@@ -392,15 +705,3 @@ class DiarioView(ctk.CTkFrame):
         if self.on_processed:
             self.on_processed()
 
-    def _generar_demo(self):
-        if not messagebox.askyesno(
-            "Generar serie de ejemplo",
-            "Esto creará 7 días de DSM sintéticos en vuelos/. "
-            "Útil para probar el flujo. ¿Continuar?"):
-            return
-        ProcessDialog(
-            self.winfo_toplevel(),
-            titulo="Generando serie de DSM de ejemplo",
-            popen_factory=self.state.run_generar_serie,
-            on_done=lambda ok: (ok and self.refresh()),
-        )
