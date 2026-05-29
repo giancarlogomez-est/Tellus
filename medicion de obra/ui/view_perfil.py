@@ -56,7 +56,7 @@ class PerfilView(ctk.CTkFrame):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        panel = ctk.CTkFrame(self, fg_color="#0f1115",
+        panel = ctk.CTkFrame(self, fg_color=T.CARD_BG,
                               corner_radius=10, width=290)
         panel.grid(row=0, column=0, sticky="ns", padx=(0, 10), pady=4)
         panel.grid_propagate(False)
@@ -78,13 +78,13 @@ class PerfilView(ctk.CTkFrame):
         ctk.CTkButton(bar, text="Todas", height=28,
                        fg_color="transparent", border_width=1,
                        border_color=T.PRIMARY, text_color=T.PRIMARY,
-                       hover_color="#1F2937",
+                       hover_color=T.HOVER_BG,
                        command=self._sel_todas).pack(
             side="left", expand=True, fill="x", padx=(0, 4))
         ctk.CTkButton(bar, text="Ninguna", height=28,
                        fg_color="transparent", border_width=1,
                        border_color=T.PRIMARY, text_color=T.PRIMARY,
-                       hover_color="#1F2937",
+                       hover_color=T.HOVER_BG,
                        command=self._sel_ninguna).pack(
             side="left", expand=True, fill="x", padx=(4, 0))
 
@@ -96,8 +96,11 @@ class PerfilView(ctk.CTkFrame):
         self._var_paso = ctk.StringVar(value="2")
         ctk.CTkOptionMenu(sp, values=["1", "2", "5", "10"],
                            variable=self._var_paso, width=80,
-                           fg_color="#1F2937", button_color="#1F2937",
-                           button_hover_color="#374151"
+                           fg_color=T.INPUT_BG, button_color=T.INPUT_BG,
+                           button_hover_color=T.INPUT_HOVER,
+                           text_color=T.TEXT,
+                           dropdown_fg_color=T.CARD_BG,
+                           dropdown_text_color=T.TEXT
                            ).pack(side="right")
 
         self.btn_dibujar = ctk.CTkButton(
@@ -112,7 +115,7 @@ class PerfilView(ctk.CTkFrame):
         self.info_lbl.pack(fill="x", padx=14, pady=(0, 12))
 
         # ── Canvas plot ──────────────────────────────────────────────────
-        self.plot_holder = ctk.CTkFrame(self, fg_color="#1a1d23",
+        self.plot_holder = ctk.CTkFrame(self, fg_color=T.PLOT_3D_BG,
                                          corner_radius=10)
         self.plot_holder.grid(row=0, column=1, sticky="nsew", pady=4)
 
@@ -240,13 +243,16 @@ class PerfilView(ctk.CTkFrame):
         for w in self.plot_holder.winfo_children():
             w.destroy()
 
-        plt.style.use("dark_background")
-        fig = Figure(figsize=(11, 5.4), dpi=100, facecolor="#1a1d23")
+        dark = ctk.get_appearance_mode() != "Light"
+        plt.style.use("dark_background" if dark else "default")
+        bg = T.mc(T.PLOT_3D_BG); axfg = T.mc(T.AXIS_FG)
+        fg_line = T.mc(T.TEXT); grid = T.mc(T.GRID_COLOR)
+        fig = Figure(figsize=(11, 5.4), dpi=100, facecolor=bg)
         ax = fig.add_subplot(111)
-        ax.set_facecolor("#1a1d23")
+        ax.set_facecolor(bg)
 
-        # 1) Baseline (blanco)
-        ax.plot(prog, z_base, color="white", lw=1.8, label="Terreno natural")
+        # 1) Baseline (terreno natural)
+        ax.plot(prog, z_base, color=fg_line, lw=1.8, label="Terreno natural")
 
         # 2) Capa activa con relleno corte/lleno
         activa = self._activa_var.get()
@@ -282,11 +288,11 @@ class PerfilView(ctk.CTkFrame):
                     alpha=1.0 if es_activa else 0.85)
 
         # ── Estética ────────────────────────────────────────────────────
-        ax.set_xlabel("Abscisa (m)", color="#cbd5e1", fontsize=10)
-        ax.set_ylabel("Cota Z (m)",  color="#cbd5e1", fontsize=10)
-        ax.tick_params(colors="#cbd5e1", labelsize=9)
+        ax.set_xlabel("Abscisa (m)", color=axfg, fontsize=10)
+        ax.set_ylabel("Cota Z (m)",  color=axfg, fontsize=10)
+        ax.tick_params(colors=axfg, labelsize=9)
         ax.grid(True, ls="--", alpha=0.18)
-        for s in ax.spines.values(): s.set_color("#374151")
+        for s in ax.spines.values(): s.set_color(grid)
 
         # Eje X con etiquetas tipo K0+020
         if len(prog) > 0:
@@ -303,9 +309,9 @@ class PerfilView(ctk.CTkFrame):
         cfg = self.state.load_config() or {}
         ax.set_title(
             f"Perfil longitudinal — {cfg.get('nombre', 'Proyecto')}",
-            color="white", fontsize=11, pad=10)
+            color=fg_line, fontsize=11, pad=10)
         ax.legend(loc="best", fontsize=8, frameon=False,
-                   labelcolor="#e5e7eb")
+                   labelcolor=axfg)
 
         fig.tight_layout()
         self._fig = fig

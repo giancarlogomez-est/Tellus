@@ -75,7 +75,7 @@ class View3D(ctk.CTkFrame):
         self.grid_rowconfigure(0, weight=1)
 
         # ── Panel control ─────────────────────────────────────────────────
-        panel = ctk.CTkFrame(self, fg_color="#0f1115",
+        panel = ctk.CTkFrame(self, fg_color=T.CARD_BG,
                               corner_radius=10, width=270)
         panel.grid(row=0, column=0, sticky="ns", padx=(0, 10), pady=4)
         panel.grid_propagate(False)
@@ -108,13 +108,13 @@ class View3D(ctk.CTkFrame):
         ctk.CTkButton(bar, text="Todas", height=28,
                        fg_color="transparent", border_width=1,
                        border_color=T.PRIMARY, text_color=T.PRIMARY,
-                       hover_color="#1F2937",
+                       hover_color=T.HOVER_BG,
                        command=self._sel_todas).pack(
             side="left", expand=True, fill="x", padx=(0, 4))
         ctk.CTkButton(bar, text="Ninguna", height=28,
                        fg_color="transparent", border_width=1,
                        border_color=T.PRIMARY, text_color=T.PRIMARY,
-                       hover_color="#1F2937",
+                       hover_color=T.HOVER_BG,
                        command=self._sel_ninguna).pack(
             side="left", expand=True, fill="x", padx=(4, 0))
 
@@ -130,7 +130,7 @@ class View3D(ctk.CTkFrame):
         self.info_lbl.pack(fill="x", padx=14, pady=(0, 12))
 
         # ── Canvas plot ──────────────────────────────────────────────────
-        self.plot_holder = ctk.CTkFrame(self, fg_color="#1a1d23",
+        self.plot_holder = ctk.CTkFrame(self, fg_color=T.PLOT_3D_BG,
                                          corner_radius=10)
         self.plot_holder.grid(row=0, column=1, sticky="nsew", pady=4)
 
@@ -235,10 +235,14 @@ class View3D(ctk.CTkFrame):
         for w in self.plot_holder.winfo_children():
             w.destroy()
 
-        plt.style.use("dark_background")
-        fig = Figure(figsize=(10, 6.5), dpi=92, facecolor="#1a1d23")
+        dark = ctk.get_appearance_mode() != "Light"
+        plt.style.use("dark_background" if dark else "default")
+        bg = T.mc(T.PLOT_3D_BG); axfg = T.mc(T.AXIS_FG)
+        grid = T.mc(T.GRID_COLOR)
+        pane_rgba = (0.10, 0.11, 0.14, 0.7) if dark else (0.95, 0.96, 0.98, 0.7)
+        fig = Figure(figsize=(10, 6.5), dpi=92, facecolor=bg)
         ax = fig.add_subplot(111, projection="3d", computed_zorder=False)
-        ax.set_facecolor("#1a1d23")
+        ax.set_facecolor(bg)
 
         wire = self._var_wire.get()
         z_all = []
@@ -291,16 +295,16 @@ class View3D(ctk.CTkFrame):
             sm = cm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
             cb = fig.colorbar(sm, ax=ax, fraction=0.025, pad=0.04, shrink=0.55)
             cb.set_label("ΔZ vs baseline (m)\nrojo = corte · verde = relleno",
-                          color="#cbd5e1", fontsize=8)
-            cb.ax.tick_params(colors="#cbd5e1", labelsize=7)
+                          color=axfg, fontsize=8)
+            cb.ax.tick_params(colors=axfg, labelsize=7)
 
-        ax.set_xlabel("Este (m)", color="#cbd5e1", fontsize=8)
-        ax.set_ylabel("Norte (m)", color="#cbd5e1", fontsize=8)
-        ax.set_zlabel("Cota Z (m)", color="#cbd5e1", fontsize=8)
-        ax.tick_params(colors="#cbd5e1", labelsize=7)
+        ax.set_xlabel("Este (m)", color=axfg, fontsize=8)
+        ax.set_ylabel("Norte (m)", color=axfg, fontsize=8)
+        ax.set_zlabel("Cota Z (m)", color=axfg, fontsize=8)
+        ax.tick_params(colors=axfg, labelsize=7)
         for pane in (ax.xaxis.pane, ax.yaxis.pane, ax.zaxis.pane):
-            pane.set_facecolor((0.10, 0.11, 0.14, 0.7))
-            pane.set_edgecolor("#374151")
+            pane.set_facecolor(pane_rgba)
+            pane.set_edgecolor(grid)
 
         if z_all:
             zmin = float(np.nanmin([np.nanmin(z) for z in z_all]))
@@ -310,13 +314,13 @@ class View3D(ctk.CTkFrame):
 
         cfg = self.state.load_config() or {}
         ax.set_title(f"Modelo 3D — {cfg.get('nombre', 'Proyecto')}",
-                      color="white", fontsize=11, pad=10)
+                      color=T.mc(T.TEXT), fontsize=11, pad=10)
         if capas:
             handles = [plt.Line2D([0], [0], color=PALETA[
                 list(self._chk_vars.keys()).index(f) % len(PALETA)],
                 lw=4, label=f) for f, _ in capas]
             ax.legend(handles=handles, loc="upper left", fontsize=7,
-                       frameon=False, labelcolor="#e5e7eb")
+                       frameon=False, labelcolor=axfg)
 
         ax.view_init(elev=28, azim=-60)
         fig.tight_layout()

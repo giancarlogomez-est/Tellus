@@ -126,7 +126,7 @@ class ConfigView(ctk.CTkFrame):
         ctk.CTkButton(bar, text="Recargar",
                        fg_color="transparent", border_width=1,
                        border_color=T.PRIMARY, text_color=T.PRIMARY,
-                       hover_color="#1F2937", height=42, width=120,
+                       hover_color=T.HOVER_BG, height=42, width=120,
                        command=self.refresh).pack(side="right", padx=(0, 10))
 
     def _campo(self, parent, key: str, etiqueta: str, hint: str = "",

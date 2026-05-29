@@ -81,7 +81,7 @@ class ReportesView(ctk.CTkFrame):
                                           command=self._abrir_carpeta,
                                           fg_color="transparent", border_width=1,
                                           border_color=T.PRIMARY, text_color=T.PRIMARY,
-                                          hover_color="#1F2937")
+                                          hover_color=T.HOVER_BG)
         self.btn_carpeta.pack(side="left", padx=(8, 0))
 
     def _lista_scroll(self, parent):
@@ -110,8 +110,8 @@ class ReportesView(ctk.CTkFrame):
                 btn = ctk.CTkButton(
                     holder, text=etiqueta, anchor="w",
                     height=32, corner_radius=6,
-                    fg_color="transparent", text_color="#E5E7EB",
-                    hover_color="#1F2937",
+                    fg_color="transparent", text_color=T.TEXT,
+                    hover_color=T.HOVER_BG,
                     command=lambda p=path: self._seleccionar(p),
                 )
                 btn.pack(fill="x", pady=2, padx=2)
@@ -120,7 +120,7 @@ class ReportesView(ctk.CTkFrame):
         self._seleccion = path
         self.btn_abrir.configure(state="normal")
         self.btn_carpeta.configure(state="normal")
-        self.info_lbl.configure(text=path.name, text_color="white")
+        self.info_lbl.configure(text=path.name, text_color=T.TEXT)
 
         # Limpiar preview previo
         for w in self.preview_holder.winfo_children():

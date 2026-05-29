@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +34,10 @@ class ProjectState:
         self.odm_script: Path = base / "02_dron_odm" / "calculo_volumen_odm.py"
         self.gen_serie_script: Path = base / "03_pipeline_diario" / "generar_serie_ejemplo.py"
         self.gen_dems_script: Path = base / "02_dron_odm" / "generar_dems_ejemplo.py"
+        self.equipos_path: Path = base / "equipos.json"
+        self.registros_equipos_path: Path = base / "registros_equipos.csv"
+        self.calcular_frentes_script: Path = base / "calcular_volumen_frentes.py"
+        self.frentes_resultado_path_file: Path = base / "baseline" / "frentes_resultado.json"
 
     # ── Configuración ────────────────────────────────────────────────────
     def load_config(self) -> Optional[dict]:
@@ -57,6 +62,8 @@ class ProjectState:
         if not any((self.baseline_dir / f"eje_via.{ext}").exists()
                    for ext in ("dxf", "dwg", "geojson")):
             falt.append("eje_via.(dxf|dwg|geojson)")
+        if not (self.baseline_dir / "dem_final.tif").exists():
+            falt.append("dem_final.tif")
         return (not falt), falt
 
     # ── Registro de vuelos ───────────────────────────────────────────────
@@ -126,3 +133,105 @@ class ProjectState:
     def heatmap_para_fecha(self, fecha: str) -> Optional[Path]:
         p = self.reportes_dir / "diarios" / f"heatmap_{fecha}.png"
         return p if p.exists() else None
+
+    # ── Rásters para el basemap del dashboard ────────────────────────────
+    def dem_baseline_path(self) -> Optional[Path]:
+        for ext in ("tif", "tiff"):
+            p = self.baseline_dir / f"dem_baseline.{ext}"
+            if p.exists():
+                return p
+        return None
+
+    def dem_final_path(self) -> Optional[Path]:
+        for ext in ("tif", "tiff"):
+            p = self.baseline_dir / f"dem_final.{ext}"
+            if p.exists():
+                return p
+        return None
+
+    # ── Frentes de obra ──────────────────────────────────────────────────
+    def load_frentes(self) -> list[dict]:
+        cfg = self.load_config() or {}
+        return list(cfg.get("frentes", []))
+
+    def save_frentes(self, frentes: list[dict]) -> None:
+        cfg = self.load_config() or {}
+        cfg["frentes"] = frentes
+        self.save_config(cfg)
+
+    def frentes_resultado_path(self) -> Optional[Path]:
+        p = self.frentes_resultado_path_file
+        return p if p.exists() else None
+
+    def load_frentes_resultado(self) -> list[dict]:
+        p = self.frentes_resultado_path()
+        if p is None:
+            return []
+        return json.loads(p.read_text(encoding="utf-8"))
+
+    def run_volumen_frentes(self) -> subprocess.Popen:
+        return subprocess.Popen(
+            [self.python_exe(), str(self.calcular_frentes_script)],
+            cwd=str(self.base), env=_utf8_env(),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            bufsize=1, text=True, encoding="utf-8", errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    def import_dem(self, src_path: str, fecha: str) -> None:
+        """Copia un .tif como vuelos/<fecha>/dsm.tif."""
+        import shutil
+        dest_dir = self.vuelos_dir / fecha
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_path, dest_dir / "dsm.tif")
+
+    def dz_dia_path(self, fecha: str) -> Optional[Path]:
+        """Raster ΔZ del día para un vuelo (carpeta vuelos/<fecha>)."""
+        p = self.vuelos_dir / fecha / "dz_dia.tif"
+        return p if p.exists() else None
+
+    # ── Equipos y flotas ────────────────────────────────────────────────
+    def load_equipos_data(self) -> dict:
+        if not self.equipos_path.exists():
+            return {"equipos": [], "flotas": []}
+        return json.loads(self.equipos_path.read_text(encoding="utf-8"))
+
+    def save_equipos_data(self, data: dict) -> None:
+        self.equipos_path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def load_registros_equipos(self) -> pd.DataFrame:
+        if not self.registros_equipos_path.exists():
+            return pd.DataFrame()
+        df = pd.read_csv(self.registros_equipos_path)
+        if df.empty:
+            return df
+        df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+        return df.sort_values("fecha").reset_index(drop=True)
+
+    def save_registro_equipo(self, registro: dict) -> None:
+        df = self.load_registros_equipos()
+        if not df.empty and "fecha" in df.columns and "equipo_id" in df.columns:
+            try:
+                target = date.fromisoformat(str(registro["fecha"]))
+                mask = ~(
+                    (df["fecha"].dt.date == target)
+                    & (df["equipo_id"] == registro["equipo_id"])
+                )
+                df = df[mask]
+            except Exception:
+                pass
+        new_row = pd.DataFrame([registro])
+        df = pd.concat([df, new_row], ignore_index=True)
+        df.to_csv(self.registros_equipos_path, index=False, encoding="utf-8")
+
+    def ultimo_dz_dia(self) -> Optional[Path]:
+        """ΔZ del vuelo más reciente que tenga dz_dia (fallback demo)."""
+        if not self.vuelos_dir.exists():
+            return None
+        for d in sorted(self.vuelos_dir.iterdir(), reverse=True):
+            p = d / "dz_dia.tif"
+            if d.is_dir() and p.exists():
+                return p
+        return None

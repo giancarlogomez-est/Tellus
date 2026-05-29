@@ -1,0 +1,22 @@
+{
+  "equipos": [
+    {
+      "id": "eq_5bb48aed",
+      "nombre": "ct4545",
+      "tipo": "Bulldozer",
+      "marca": "CATERPILLAR D5",
+      "capacidad_nominal": 100.0,
+      "unidad_produccion": "m³"
+    }
+  ],
+  "flotas": [
+    {
+      "id": "fl_8938efb7",
+      "nombre": "Flota 1",
+      "tramo": "K0+000-K0+500",
+      "equipo_ids": [
+        "eq_5bb48aed"
+      ]
+    }
+  ]
+}

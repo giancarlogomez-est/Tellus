@@ -1,13 +1,13 @@
 {
   "_instrucciones": "Edita los valores con los datos reales del proyecto. Rutas relativas a la carpeta raíz (medicion de obra/).",
-  "nombre": "Mi Proyecto Vial ESING",
-  "tramo": "K0+000 – K0+300",
+  "nombre": "Accesos Norte UF1",
+  "tramo": "K2+600 - K5+750",
   "contrato": "",
   "dem_baseline": "baseline/dem_baseline.tif",
   "eje_via": "baseline/eje_via.dxf",
-  "prog_inicio_m": 0.0,
+  "prog_inicio_m": 2600.0,
   "espaciado_secciones": 10.0,
-  "ancho_corredor": 12.0,
+  "ancho_corredor": 20.0,
   "factor_esponjamiento": 1.25,
   "factor_contraccion": 0.9,
   "epsg_proyecto": 9377,
@@ -15,5 +15,17 @@
   "vol_corte_objetivo": 15000.0,
   "vol_relleno_objetivo": 25000.0,
   "dz_min_plot": -3.0,
-  "dz_max_plot": 3.0
+  "dz_max_plot": 3.0,
+  "frentes": [
+    {
+      "nombre": "FRENTE 1 excavaciones",
+      "abs_ini": 2600.0,
+      "abs_fin": 2700.0
+    },
+    {
+      "nombre": "FRENTE 2 terraplen",
+      "abs_ini": 2800.0,
+      "abs_fin": 3000.0
+    }
+  ]
 }

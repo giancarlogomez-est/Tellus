@@ -1,4 +1,16 @@
-"""Vista Dashboard: KPIs + gráficos del avance global del proyecto."""
+"""
+Vista Dashboard — Resumen general del proyecto (estilo mockup SaaS).
+
+Layout:
+    Header     : título + filtros (periodo, frente)
+    Fila 1     : 3 KPIs de volumen + tarjeta Vista 3D (ocupa 2 filas).
+    Fila 1b    : 3 KPIs (Área, Pavimento, Avance).
+    Fila 2     : Vuelos y Modelos | Volúmenes por Período | Distribución (donut)
+    Fila 3     : Equipos Activos | Rendimiento de Equipos | Avance por Frente
+
+Si hay registro real (load_registro()), los KPIs y los gráficos lo consumen;
+si no, se muestran valores demo que coinciden con la imagen del mockup.
+"""
 from __future__ import annotations
 
 import customtkinter as ctk
@@ -8,173 +20,595 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
+from PIL import Image
+
 from . import theme as T
+from .basemap import build_overlay
 from .state import ProjectState
-from .widgets import KPICard, Card, SectionTitle
-from .view_perfil import PerfilView
+from .widgets import (
+    Card, DataTable, KPICardIcon, ProgressItem,
+    SectionTitle, StatusBadge,
+)
 
 
 class DashboardView(ctk.CTkFrame):
     def __init__(self, master, state: ProjectState):
-        super().__init__(master, fg_color="transparent")
+        super().__init__(master, fg_color=T.APP_BG)
         self.state = state
-        self._mpl_canvas = None
-        self._view_perfil: PerfilView | None = None
+        self._fig_bar = None
+        self._fig_donut = None
         self._build()
         self.refresh()
 
+    # ═══════════════════════════════════════════════════════════════════
+    # Construcción del layout
+    # ═══════════════════════════════════════════════════════════════════
     def _build(self):
-        SectionTitle(self, text="Dashboard del proyecto").pack(
-            anchor="w", padx=24, pady=(20, 4))
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color=T.APP_BG)
+        self.scroll.pack(fill="both", expand=True)
+
+        self._build_header()
+        self._build_kpi_grid()
+        self._build_middle_row()
+        self._build_bottom_row()
+
+    # ── Header (título + filtros) ───────────────────────────────────────
+    def _build_header(self):
+        header = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        header.pack(fill="x", padx=24, pady=(18, 12))
+
+        title_col = ctk.CTkFrame(header, fg_color="transparent")
+        title_col.pack(side="left", fill="x", expand=True)
+        SectionTitle(title_col, text="Dashboard",
+                     text_color=T.TEXT).pack(anchor="w")
         self.subtitulo = ctk.CTkLabel(
-            self, text="", font=T.FONT_BODY, text_color=T.TEXT_MUTED, anchor="w")
-        self.subtitulo.pack(anchor="w", padx=24, pady=(0, 14))
+            title_col, text="Resumen general del proyecto",
+            font=T.FONT_BODY, text_color=T.TEXT_MUTED, anchor="w",
+        )
+        self.subtitulo.pack(anchor="w")
 
-        kpi_row = ctk.CTkFrame(self, fg_color="transparent")
-        kpi_row.pack(fill="x", padx=20, pady=(0, 14))
-        for i in range(4):
-            kpi_row.grid_columnconfigure(i, weight=1, uniform="kpi")
+        # Botón Actualizar
+        ctk.CTkButton(
+            header, text="↻  Actualizar", width=120, height=32,
+            fg_color=T.PRIMARY, hover_color=T.PRIMARY_HOV,
+            text_color=T.TEXT_ON_DARK, font=T.FONT_BODY,
+            corner_radius=8,
+            command=self.refresh,
+        ).pack(side="right", padx=(0, 0))
 
-        self.kpi_vuelos  = KPICard(kpi_row, "Vuelos procesados",
-                                   accent=T.PRIMARY)
-        self.kpi_corte   = KPICard(kpi_row, "Corte acumulado", unit="m³",
-                                   accent=T.CORTE_COLOR)
-        self.kpi_relleno = KPICard(kpi_row, "Relleno acumulado", unit="m³",
-                                   accent=T.RELLENO_COLOR)
-        self.kpi_avance  = KPICard(kpi_row, "Avance del corte", unit="del objetivo",
-                                   accent=T.SUCCESS)
-        for i, c in enumerate([self.kpi_vuelos, self.kpi_corte,
-                               self.kpi_relleno, self.kpi_avance]):
-            c.grid(row=0, column=i, sticky="nsew", padx=6)
 
-        # Tabs: evolución 2D y perfil longitudinal
-        self.tabs = ctk.CTkTabview(self, height=420,
-                                    command=self._on_tab_change)
-        self.tabs.pack(fill="both", expand=True, padx=20, pady=(0, 20))
-        self.tabs.add("Evolución (2D)")
-        self.tabs.add("Perfil longitudinal")
+    # ── KPI grid + Vista 3D ─────────────────────────────────────────────
+    def _build_kpi_grid(self):
+        top = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        top.pack(fill="x", padx=20, pady=(0, 14))
+        top.grid_columnconfigure(0, weight=2, uniform="top")
+        top.grid_columnconfigure(1, weight=1, uniform="top")
 
-        # ── Tab 2D ──────────────────────────────────────────────────────
-        self.plot_holder = ctk.CTkFrame(
-            self.tabs.tab("Evolución (2D)"), fg_color="transparent")
-        self.plot_holder.pack(fill="both", expand=True, padx=4, pady=4)
+        # ── Columna izquierda (2 filas × 3 KPIs) ────────────────────────
+        left = ctk.CTkFrame(top, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        for c in range(3):
+            left.grid_columnconfigure(c, weight=1, uniform="kpi")
 
-        # ── Tab Perfil — lazy load ──────────────────────────────────────
-        self._tab_perfil_parent = self.tabs.tab("Perfil longitudinal")
-        self._tab_perfil_placeholder = ctk.CTkLabel(
-            self._tab_perfil_parent,
-            text="(haz clic en esta pestaña para cargar el módulo de perfil)",
-            font=T.FONT_BODY, text_color=T.TEXT_MUTED)
-        self._tab_perfil_placeholder.pack(expand=True)
+        self.kpi_ter  = KPICardIcon(left, "▲", "green",
+                                     "Volumen de Llenos", "—")
+        self.kpi_exc  = KPICardIcon(left, "▲", "red",
+                                     "Volumen de Cortes", "—")
+        self.kpi_net  = KPICardIcon(left, "⚖", "dark",
+                                     "Volumen Neto", "—")
+        self.kpi_area = KPICardIcon(left, "📐", "purple",
+                                     "Área Topografiada", "—")
+        self.kpi_pav  = KPICardIcon(left, "🛣", "blue",
+                                     "Longitud Pavimento", "—")
+        self.kpi_avg  = KPICardIcon(left, "📊", "indigo",
+                                     "Avance General", "—",
+                                     delta_suffix="vs semana pasada")
 
-    def _on_tab_change(self):
-        if (self.tabs.get() == "Perfil longitudinal"
-                and self._view_perfil is None):
-            self._tab_perfil_placeholder.destroy()
-            self._view_perfil = PerfilView(
-                self._tab_perfil_parent, self.state)
-            self._view_perfil.pack(fill="both", expand=True, padx=4, pady=4)
+        cards = [self.kpi_ter, self.kpi_exc, self.kpi_net,
+                 self.kpi_area, self.kpi_pav, self.kpi_avg]
+        for i, k in enumerate(cards):
+            r, c = divmod(i, 3)
+            k.grid(row=r, column=c, sticky="nsew", padx=4, pady=4)
 
-    # ── Datos ──────────────────────────────────────────────────────────
+        # ── Columna derecha: Vista 3D ───────────────────────────────────
+        v3d = Card(top, title="Vista 3D - Comparación de Superficies",
+                   light=True)
+        v3d.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+
+        # Basemap: hillshade del DEM + heatmap de cortes/llenos del vuelo
+        self.v3d_holder = ctk.CTkFrame(v3d, height=190, corner_radius=8,
+                                       fg_color=T.HOVER_BG)
+        self.v3d_holder.pack(fill="x", padx=18, pady=(0, 4))
+        self.v3d_holder.pack_propagate(False)
+        self._v3d_img = None
+        self.v3d_caption = ctk.CTkLabel(
+            v3d, text="Rojo = corte · Verde = relleno",
+            font=T.FONT_TINY, text_color=T.TEXT_MUTED)
+        self.v3d_caption.pack(anchor="w", padx=18, pady=(0, 6))
+
+        self._surf_var = ctk.StringVar(value="actual")
+        radios = ctk.CTkFrame(v3d, fg_color="transparent")
+        radios.pack(fill="x", padx=18, pady=(2, 6))
+        for val, txt, sub in [
+            ("actual",   "Superficie actual",   "Último vuelo procesado"),
+            ("anterior", "Superficie anterior", "Vuelo previo"),
+            ("diseno",   "Diseño",              "Superficie de proyecto"),
+        ]:
+            item = ctk.CTkFrame(radios, fg_color="transparent")
+            item.pack(anchor="w", fill="x", pady=2)
+            ctk.CTkRadioButton(
+                item, text=txt, variable=self._surf_var, value=val,
+                font=T.FONT_BODY, text_color=T.TEXT,
+                fg_color=T.PRIMARY, hover_color=T.PRIMARY_HOV,
+                border_color="#D1D5DB",
+            ).pack(anchor="w")
+            ctk.CTkLabel(
+                item, text=sub, font=T.FONT_TINY,
+                text_color=T.TEXT_MUTED, anchor="w",
+            ).pack(anchor="w", padx=(26, 0))
+
+        ctk.CTkButton(
+            v3d, text="Abrir visor 3D",
+            fg_color="transparent", border_width=1,
+            border_color=T.CARD_BORDER,
+            text_color=T.TEXT, hover_color=T.HOVER_BG,
+        ).pack(fill="x", padx=18, pady=(4, 14))
+
+    # ── Fila 2: Vuelos | Volúmenes por Período | Donut ──────────────────
+    def _build_middle_row(self):
+        row = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(0, 14))
+        row.grid_columnconfigure(0, weight=12, uniform="m")
+        row.grid_columnconfigure(1, weight=17, uniform="m")
+        row.grid_columnconfigure(2, weight=11, uniform="m")
+
+        # Vuelos y Modelos
+        self.card_vuelos = Card(row, title="Vuelos y Modelos",
+                                action_text="+ Nuevo vuelo", light=True)
+        self.card_vuelos.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self.vuelos_holder = ctk.CTkFrame(self.card_vuelos,
+                                          fg_color="transparent")
+        self.vuelos_holder.pack(fill="both", expand=True,
+                                padx=18, pady=(0, 14))
+
+        # Volúmenes por Período
+        self.card_bar = Card(row, title="Volúmenes por Período", light=True)
+        self.card_bar.grid(row=0, column=1, sticky="nsew", padx=8)
+
+        tabs = ctk.CTkFrame(self.card_bar, fg_color="transparent")
+        tabs.pack(fill="x", padx=18, pady=(0, 4))
+        self._bar_period = ctk.StringVar(value="Diario")
+        ctk.CTkSegmentedButton(
+            tabs, values=["Diario", "Semanal", "Mensual"],
+            variable=self._bar_period,
+            font=T.FONT_SMALL,
+            fg_color=T.HOVER_BG, selected_color=T.CARD_BG,
+            selected_hover_color=T.CARD_BG, unselected_color=T.HOVER_BG,
+            unselected_hover_color=T.CARD_BORDER,
+            text_color=T.TEXT, text_color_disabled=T.TEXT_MUTED,
+            corner_radius=6, height=26,
+        ).pack(side="right")
+
+        self.bar_holder = ctk.CTkFrame(self.card_bar, fg_color="transparent")
+        self.bar_holder.pack(fill="both", expand=True,
+                             padx=12, pady=(0, 14))
+
+        # Donut
+        self.card_donut = Card(row, title="Distribución de Volúmenes",
+                               light=True)
+        self.card_donut.grid(row=0, column=2, sticky="nsew", padx=(8, 0))
+        self.donut_holder = ctk.CTkFrame(self.card_donut,
+                                         fg_color="transparent")
+        self.donut_holder.pack(fill="both", expand=True,
+                               padx=12, pady=(0, 14))
+
+    # ── Fila 3: Equipos + Rendimientos (unificado) | Frentes ────────────
+    def _build_bottom_row(self):
+        row = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(0, 20))
+        row.grid_columnconfigure(0, weight=28, uniform="b")
+        row.grid_columnconfigure(1, weight=12, uniform="b")
+
+        # Tabla unificada equipos + rendimiento
+        self.c_eq = Card(
+            row, title="Equipos y Rendimiento (Hoy)",
+            action_text="→ Ver detalle",
+            light=True,
+        )
+        self.c_eq.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self.eq_holder = ctk.CTkFrame(self.c_eq, fg_color="transparent")
+        self.eq_holder.pack(fill="x", padx=18, pady=(0, 14))
+
+        # Volumen por Frente
+        c_fr = Card(row, title="Volumen por Frente", light=True)
+        c_fr.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        self.fr_box = ctk.CTkFrame(c_fr, fg_color="transparent")
+        self.fr_box.pack(fill="x", padx=18, pady=(2, 4))
+        ctk.CTkButton(
+            c_fr, text="Ver todos los frentes",
+            fg_color="transparent", text_color=T.PRIMARY,
+            hover_color=T.HOVER_BG, font=T.FONT_SMALL,
+        ).pack(pady=(0, 12))
+
+    # ═══════════════════════════════════════════════════════════════════
+    # Refresh — alimenta KPIs y gráficos
+    # ═══════════════════════════════════════════════════════════════════
     def refresh(self):
         cfg = self.state.load_config() or {}
-        df = self.state.load_registro()
+        df = self._load_history_safe()
 
-        nombre = cfg.get("nombre", "Proyecto sin configurar")
-        tramo  = cfg.get("tramo", "")
-        self.subtitulo.configure(text=f"{nombre} · {tramo}" if tramo else nombre)
+        nombre = cfg.get("nombre", "Resumen general del proyecto")
+        tramo = cfg.get("tramo", "")
+        self.subtitulo.configure(
+            text=f"{nombre} · {tramo}" if tramo else nombre,
+        )
+
+        # Longitud y área calculadas desde frentes + configuración del corredor
+        frentes_cfg = self.state.load_frentes()
+        long_str = "—"
+        area_str = "—"
+        if frentes_cfg:
+            total_long_m = sum(
+                float(f.get("abs_fin", 0)) - float(f.get("abs_ini", 0))
+                for f in frentes_cfg
+            )
+            if total_long_m > 0:
+                long_str = f"{total_long_m / 1000:.2f} km"
+                ancho = float(cfg.get("ancho_corredor", 0))
+                if ancho > 0:
+                    area_ha = (total_long_m * 2 * ancho) / 10_000
+                    area_str = f"{area_ha:.1f} ha"
 
         if df.empty:
-            self.kpi_vuelos.set("0")
-            self.kpi_corte.set("—")
-            self.kpi_relleno.set("—")
-            self.kpi_avance.set("—")
-            self._mensaje_vacio()
+            self.kpi_ter.set_value("—")
+            self.kpi_exc.set_value("—")
+            self.kpi_net.set_value("—")
+            self.kpi_area.set_value(area_str)
+            self.kpi_pav.set_value(long_str)
+            self.kpi_avg.set_value("—", delta_suffix="vs semana pasada")
+            self._render_flights_empty()
+            self._render_bar_chart_empty()
+            self._render_donut(0, 0, 0)
+            self._render_basemap(None)
+            self._render_equipos_real()
+            self._render_frentes()
             return
 
+        # Datos reales del registro
         ult = df.iloc[-1]
-        self.kpi_vuelos.set(str(int(ult["vuelo_num"])))
-        self.kpi_corte.set(f"{ult['vol_corte_acum']:,.0f}")
-        self.kpi_relleno.set(f"{ult['vol_relleno_acum']:,.0f}")
+        corte = float(ult.get("vol_corte_dia", 0))
+        relleno = float(ult.get("vol_relleno_dia", 0))
+        neto = corte - relleno
 
-        obj_c = cfg.get("vol_corte_objetivo", 0) or 0
-        if obj_c:
-            pct = ult["vol_corte_acum"] / obj_c * 100
-            color = T.SUCCESS if pct >= 100 else (
-                T.WARNING if pct >= 60 else T.PRIMARY)
-            self.kpi_avance.set(f"{pct:.1f}%", accent=color)
+        self.kpi_ter.set_value(f"{relleno:,.0f} m³",
+                               self._delta(df, "vol_relleno_dia"))
+        self.kpi_exc.set_value(f"{corte:,.0f} m³",
+                               self._delta(df, "vol_corte_dia"),
+                               delta_up=False)
+        self.kpi_net.set_value(f"{neto:,.0f} m³",
+                               "↑ 0.0%", delta_up=neto >= 0)
+        self.kpi_area.set_value(area_str, "↑ —")
+        self.kpi_pav.set_value(long_str, "↑ —")
+        obj = cfg.get("vol_corte_objetivo", 0) or 0
+        if obj:
+            pct = float(ult.get("vol_corte_acum", 0)) / obj * 100
+            self.kpi_avg.set_value(f"{pct:.1f}%", "↑ —",
+                                    delta_suffix="vs semana pasada")
         else:
-            self.kpi_avance.set("—")
+            self.kpi_avg.set_value("—",
+                                    delta_suffix="vs semana pasada")
 
-        self._dibujar_grafico(df, cfg)
-        if self._view_perfil:
-            self._view_perfil.refresh()
+        self._render_flights(df)
+        self._render_bar_chart(df)
+        self._render_donut(corte, relleno, neto)
+        self._render_basemap(ult["fecha"].strftime("%Y-%m-%d"))
+        self._render_equipos_real()
+        self._render_frentes()
 
-    def _mensaje_vacio(self):
-        for w in self.plot_holder.winfo_children():
+    # ── Basemap (hillshade + heatmap cortes/llenos) ─────────────────────
+    def _render_basemap(self, fecha):
+        holder = getattr(self, "v3d_holder", None)
+        if holder is None:
+            return
+        for w in holder.winfo_children():
+            w.destroy()
+
+        dz_path = self.state.dz_dia_path(fecha) if fecha else None
+        if dz_path is None:
+            dz_path = self.state.ultimo_dz_dia()
+        dem_path = self.state.dem_baseline_path()
+
+        img = build_overlay(dem_path, dz_path) if dz_path else None
+        if img is None:
+            self._v3d_img = None
+            ctk.CTkLabel(
+                holder, text="Sin datos de cortes/llenos para mostrar",
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+            ).place(relx=0.5, rely=0.5, anchor="center")
+            return
+
+        holder.update_idletasks()
+        avail_w = max(holder.winfo_width() - 4, 360)
+        avail_h = max(holder.winfo_height() - 4, 150)
+        ratio = min(avail_w / img.width, avail_h / img.height)
+        size = (max(int(img.width * ratio), 120),
+                max(int(img.height * ratio), 60))
+        self._v3d_img = ctk.CTkImage(light_image=img, dark_image=img,
+                                     size=size)
+        ctk.CTkLabel(holder, image=self._v3d_img, text="").place(
+            relx=0.5, rely=0.5, anchor="center")
+
+    # ── Helpers ─────────────────────────────────────────────────────────
+    def _load_history_safe(self):
+        """Devuelve el registro si existe; DataFrame vacío en caso contrario."""
+        try:
+            return self.state.load_registro()
+        except Exception:
+            import pandas as pd
+            return pd.DataFrame()
+
+    def _delta(self, df, col: str) -> str:
+        if col not in df.columns or len(df) < 2:
+            return ""
+        prev = float(df.iloc[-2][col]) or 1e-9
+        curr = float(df.iloc[-1][col])
+        return f"↑ {(curr - prev) / prev * 100:+.1f}%"
+
+    def _render_flights_empty(self):
+        for w in self.vuelos_holder.winfo_children():
             w.destroy()
         ctk.CTkLabel(
-            self.plot_holder,
-            text=("Aún no hay vuelos procesados.\n\n"
-                  "Ve a 'Vuelo diario' para procesar un DSM, "
-                  "o genera datos de ejemplo desde la barra inferior."),
-            font=T.FONT_BODY, text_color=T.TEXT_MUTED, justify="center",
-        ).pack(expand=True)
+            self.vuelos_holder,
+            text="Sin vuelos procesados",
+            font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+        ).pack(anchor="w", pady=14)
 
-    def _dibujar_grafico(self, df, cfg):
-        # Limpia figura previa para no acumular memoria de matplotlib
-        if getattr(self, "_fig2d", None) is not None:
-            try: plt.close(self._fig2d)
-            except Exception: pass
-            self._fig2d = None
-        for w in self.plot_holder.winfo_children():
+    def _render_flights(self, df):
+        for w in self.vuelos_holder.winfo_children():
             w.destroy()
+        table = DataTable(
+            self.vuelos_holder,
+            columns=["Fecha", "Vuelo", "Corte día", "Estado"],
+            widths=[110, 60, 100, 90],
+        )
+        table.pack(fill="x")
+        for _, r in df.tail(5).iloc[::-1].iterrows():
+            fecha = r["fecha"].strftime("%d %b, %Y")
+            vuelo = f"#{int(r.get('vuelo_num', 0))}"
+            corte = f"{r.get('vol_corte_dia', 0):,.0f} m³"
+            badge = StatusBadge(table, "Procesado", kind="ok")
+            table.add_row([f"✈ {fecha}", vuelo, corte, badge])
+        ctk.CTkButton(
+            self.vuelos_holder, text="Ver todos los vuelos",
+            fg_color="transparent", text_color=T.PRIMARY,
+            hover_color=T.HOVER_BG, font=T.FONT_SMALL,
+        ).pack(pady=(8, 0))
 
-        plt.style.use("dark_background")
-        fig = Figure(figsize=(11, 4.6), dpi=100, facecolor="#1a1d23")
-        self._fig2d = fig
+    def _render_bar_chart_empty(self):
+        self._clear_canvas("bar")
+        ctk.CTkLabel(
+            self.bar_holder,
+            text="Sin datos de volúmenes",
+            font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+        ).pack(anchor="center", pady=30)
 
-        ax1 = fig.add_subplot(1, 2, 1)
-        ax1.set_facecolor("#1a1d23")
-        fechas = [f.strftime("%d/%m") for f in df["fecha"]]
-        x = range(len(fechas))
-        ax1.bar(x,  df["vol_corte_dia"].values,
-                color=T.CORTE_COLOR, label="Corte", alpha=0.95)
-        ax1.bar(x, -df["vol_relleno_dia"].values,
-                color=T.RELLENO_COLOR, label="Relleno", alpha=0.95)
-        ax1.axhline(0, color="#9CA3AF", lw=0.6)
-        ax1.set_xticks(list(x))
-        ax1.set_xticklabels(fechas, fontsize=8, rotation=30, ha="right")
-        ax1.set_title("Producción diaria (m³)", fontsize=10, color="white")
-        ax1.legend(fontsize=8, frameon=False)
-        ax1.grid(axis="y", ls="--", alpha=0.18)
-        ax1.tick_params(colors="#cbd5e1", labelsize=8)
-        for s in ax1.spines.values(): s.set_color("#374151")
+    def _render_bar_chart(self, df):
+        df = df.tail(7)
+        labels = [f.strftime("%d %b") for f in df["fecha"]]
+        exc = df["vol_corte_dia"].tolist() if "vol_corte_dia" in df else [0]*len(df)
+        ter = df["vol_relleno_dia"].tolist() if "vol_relleno_dia" in df else [0]*len(df)
+        self._draw_bar_chart(labels, exc, ter)
 
-        ax2 = fig.add_subplot(1, 2, 2)
-        ax2.set_facecolor("#1a1d23")
-        ax2.plot(x, df["vol_corte_acum"].values,
-                 "-o", color=T.CORTE_LIGHT, lw=2, ms=4, label="Corte acum.")
-        ax2.plot(x, df["vol_relleno_acum"].values,
-                 "-o", color=T.RELLENO_LIGHT, lw=2, ms=4, label="Relleno acum.")
-        obj_c = cfg.get("vol_corte_objetivo", 0) or 0
-        obj_r = cfg.get("vol_relleno_objetivo", 0) or 0
-        if obj_c:
-            ax2.axhline(obj_c, color=T.CORTE_LIGHT, lw=0.7, ls="--", alpha=0.6,
-                        label=f"Obj. corte {obj_c:,.0f}")
-        if obj_r:
-            ax2.axhline(obj_r, color=T.RELLENO_LIGHT, lw=0.7, ls="--", alpha=0.6,
-                        label=f"Obj. relleno {obj_r:,.0f}")
-        ax2.set_xticks(list(x))
-        ax2.set_xticklabels(fechas, fontsize=8, rotation=30, ha="right")
-        ax2.set_title("Acumulado vs objetivo (m³)", fontsize=10, color="white")
-        ax2.legend(fontsize=7, frameon=False, loc="upper left")
-        ax2.grid(axis="y", ls="--", alpha=0.18)
-        ax2.tick_params(colors="#cbd5e1", labelsize=8)
-        for s in ax2.spines.values(): s.set_color("#374151")
+    def _draw_bar_chart(self, labels, exc, ter):
+        self._clear_canvas("bar")
 
+        plt.style.use("default")
+        bg = T.mc(T.CARD_BG); axis = T.mc(T.AXIS_FG); grid = T.mc(T.GRID_COLOR)
+        fig = Figure(figsize=(7, 3.2), dpi=100, facecolor=bg)
+        self._fig_bar = fig
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(bg)
+
+        x = range(len(labels))
+        ax.bar(x,  exc, color=T.CORTE_COLOR, label="Cortes (m³)", width=0.55)
+        ax.bar(x, [-v for v in ter], color=T.RELLENO_COLOR,
+               label="Llenos (m³)", width=0.55)
+        neto = [a - b for a, b in zip(exc, ter)]
+        ax.plot(x, neto, "-o", color=T.PRIMARY, lw=2, ms=5,
+                mfc=T.PRIMARY, mec=bg, label="Neto (m³)")
+        ax.axhline(0, color=grid, lw=0.6)
+        ax.set_xticks(list(x))
+        ax.set_xticklabels(labels, fontsize=8, color=axis)
+        ax.legend(fontsize=8, frameon=False, loc="upper left",
+                  ncol=3, bbox_to_anchor=(0, 1.08), labelcolor=axis)
+        ax.grid(axis="y", ls="-", color=grid)
+        ax.tick_params(colors=axis, labelsize=8)
+        for s in ax.spines.values():
+            s.set_color(grid)
         fig.tight_layout()
-        canvas = FigureCanvasTkAgg(fig, master=self.plot_holder)
+
+        canvas = FigureCanvasTkAgg(fig, master=self.bar_holder)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
-        self._mpl_canvas = canvas
+
+    def _render_donut(self, corte: float, relleno: float, neto: float):
+        self._clear_canvas("donut")
+        total = abs(corte) + abs(relleno)
+
+        plt.style.use("default")
+        bg = T.mc(T.CARD_BG)
+        fig = Figure(figsize=(4, 3.4), dpi=100, facecolor=bg)
+        self._fig_donut = fig
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(bg)
+        ax.pie(
+            [max(abs(corte), 0.01), max(abs(relleno), 0.01)],
+            colors=[T.CORTE_COLOR, T.RELLENO_COLOR],
+            startangle=90, counterclock=False,
+            wedgeprops=dict(width=0.32, edgecolor=bg),
+        )
+        ax.text(0, 0.12, "Volumen Total", ha="center",
+                fontsize=9, color=T.mc(T.TEXT_MUTED))
+        ax.text(0, -0.12, f"{int(total):,} m³", ha="center",
+                fontsize=14, fontweight="bold", color=T.mc(T.TEXT))
+        ax.set(aspect="equal")
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=self.donut_holder)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="x", expand=False)
+
+        legend = ctk.CTkFrame(self.donut_holder, fg_color="transparent")
+        legend.pack(fill="x", pady=(4, 0))
+        for color, name, value, pct in [
+            (T.CORTE_COLOR, "Cortes", corte,
+             abs(corte) / total * 100 if total else 0),
+            (T.RELLENO_COLOR, "Llenos", relleno,
+             abs(relleno) / total * 100 if total else 0),
+            (T.PRIMARY, "Neto", neto, None),
+        ]:
+            r = ctk.CTkFrame(legend, fg_color="transparent")
+            r.pack(fill="x", pady=2)
+            ctk.CTkLabel(r, text="●", text_color=color,
+                         font=(T.FONT_FAMILY, 12, "bold")).pack(side="left")
+            ctk.CTkLabel(r, text=f" {name}", font=T.FONT_BODY,
+                         text_color=T.TEXT).pack(side="left")
+            txt = f"{value:,.0f} m³"
+            if pct is not None:
+                txt += f"  ({pct:.1f}%)"
+            ctk.CTkLabel(r, text=txt, font=T.FONT_SMALL,
+                         text_color=T.TEXT_MUTED).pack(side="right")
+
+    def _clear_canvas(self, which: str):
+        target, fig = (
+            (self.bar_holder, self._fig_bar) if which == "bar"
+            else (self.donut_holder, self._fig_donut)
+        )
+        if fig is not None:
+            try: plt.close(fig)
+            except Exception: pass
+            if which == "bar": self._fig_bar = None
+            else: self._fig_donut = None
+        for w in target.winfo_children():
+            w.destroy()
+
+    # ── Volumen por frente (datos reales) ───────────────────────────────
+    def _render_frentes(self):
+        for w in self.fr_box.winfo_children():
+            w.destroy()
+        resultados = self.state.load_frentes_resultado()
+        total_row = next((r for r in resultados if r.get("nombre") == "TOTAL"), None)
+        datos = [r for r in resultados if r.get("nombre") != "TOTAL"]
+        if not datos:
+            frentes = self.state.load_frentes()
+            datos = frentes
+        if not datos:
+            ctk.CTkLabel(
+                self.fr_box, text="Sin frentes definidos",
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+            ).pack(anchor="w", pady=10)
+            return
+        # Denominador: corte total del proyecto (fila TOTAL si existe)
+        total_corte = float(total_row.get("corte_m3", 0)) if total_row else sum(
+            float(r.get("corte_m3", 0)) for r in datos
+        )
+        for fr in datos:
+            nombre = str(fr.get("nombre", "Frente"))
+            corte = float(fr.get("corte_m3", 0))
+            pct = (corte / total_corte * 100) if total_corte > 0 else 0.0
+            ProgressItem(self.fr_box, nombre, pct,
+                         color=T.PRIMARY).pack(fill="x")
+
+    # ── Tabla unificada de equipos (datos reales) ────────────────────────
+    def _render_equipos_real(self):
+        for w in self.eq_holder.winfo_children():
+            w.destroy()
+
+        try:
+            import pandas as pd
+            equipos_data = self.state.load_equipos_data()
+            df_reg = self.state.load_registros_equipos()
+        except Exception:
+            for w in self.eq_holder.winfo_children():
+                w.destroy()
+            ctk.CTkLabel(self.eq_holder, text="Sin equipos registrados",
+                         font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+                         ).pack(anchor="w", pady=14)
+            return
+
+        equipos_list = equipos_data.get("equipos", [])
+        flotas = equipos_data.get("flotas", [])
+
+        if not equipos_list:
+            for w in self.eq_holder.winfo_children():
+                w.destroy()
+            ctk.CTkLabel(self.eq_holder, text="Sin equipos registrados",
+                         font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+                         ).pack(anchor="w", pady=14)
+            return
+
+        # Mapa equipo_id → flota
+        eq_to_flota: dict[str, dict] = {}
+        for fl in flotas:
+            for eid in fl.get("equipo_ids", []):
+                eq_to_flota[eid] = fl
+
+        # Último registro diario por equipo (si existe)
+        latest_reg: dict[str, dict] = {}
+        prev_rend: dict[str, float] = {}
+        if not df_reg.empty:
+            latest_date = df_reg["fecha"].max()
+            for _, r in df_reg[df_reg["fecha"] == latest_date].iterrows():
+                latest_reg[r["equipo_id"]] = r.to_dict()
+            for _, r in df_reg[df_reg["fecha"] < latest_date].sort_values("fecha").iterrows():
+                prev_rend[r["equipo_id"]] = float(r.get("rendimiento", 0) or 0)
+
+        tbl = DataTable(
+            self.eq_holder,
+            columns=["Equipo", "Tipo", "Flota", "Estado",
+                     "Horas", "Producción", "Rendimiento", "vs Ayer"],
+            widths=[110, 100, 110, 80, 65, 90, 100, 90],
+        )
+        tbl.pack(fill="x")
+
+        for eq in equipos_list:
+            eid = eq["id"]
+            fl = eq_to_flota.get(eid)
+            flota_name = fl["nombre"] if fl else "Sin flota"
+            u = eq.get("unidad_produccion", "m³")
+
+            rec = latest_reg.get(eid)
+            if rec:
+                horas_val = rec.get("horas_trabajadas")
+                prod_val  = rec.get("produccion")
+                rend_val  = rec.get("rendimiento")
+                horas_str = f"{horas_val:.1f} h" if pd.notna(horas_val) else "—"
+                prod_str  = f"{prod_val:,.1f} {u}" if pd.notna(prod_val) else "—"
+                rend_str  = f"{rend_val:.2f} {u}/h" if pd.notna(rend_val) else "—"
+            else:
+                horas_str = "—"
+                prod_str  = "—"
+                rend_str  = "—"
+                rend_val  = None
+
+            prev = prev_rend.get(eid)
+            if prev and rend_val is not None and pd.notna(rend_val) and prev != 0:
+                var = (float(rend_val) - prev) / abs(prev) * 100
+                up = var >= 0
+                arrow = "↗" if up else "↘"
+                vs_lbl = ctk.CTkLabel(
+                    tbl, text=f"{arrow} {abs(var):.1f}%",
+                    font=T.FONT_BODY,
+                    text_color=T.SUCCESS if up else T.DANGER,
+                    anchor="w",
+                )
+            else:
+                vs_lbl = ctk.CTkLabel(tbl, text="—", font=T.FONT_BODY,
+                                      text_color=T.TEXT_MUTED, anchor="w")
+
+            badge = StatusBadge(tbl, "Activo", kind="ok")
+            tbl.add_row([
+                eq.get("nombre", ""), eq.get("tipo", ""),
+                flota_name, badge,
+                horas_str, prod_str, rend_str, vs_lbl,
+            ])
