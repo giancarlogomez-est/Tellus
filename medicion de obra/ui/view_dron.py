@@ -1,4 +1,4 @@
-"""Vista 'Volúmenes': gestión de insumos base y cálculo de ΔZ / volúmenes."""
+"""Vista 'Volúmenes': insumos base, frentes de obra y cálculo de ΔZ."""
 from __future__ import annotations
 
 import shutil
@@ -10,6 +10,16 @@ import customtkinter as ctk
 from . import theme as T
 from .state import ProjectState
 from .widgets import Card, SectionTitle, StatusBadge, UploadCard
+
+
+# ── Helper ────────────────────────────────────────────────────────────────
+def _km_str(m: float) -> str:
+    m_int = int(m)
+    return f"K{m_int // 1000}+{m_int % 1000:03d}"
+
+
+def _fmt_vol(v: float) -> str:
+    return f"{v:,.0f}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -29,19 +39,23 @@ class VolumenesView(ctk.CTkFrame):
         self._build_header()
         self._build_upload_section()
         self._build_status_section()
+        self._build_frentes_section()
+        self._build_resultados_section()
 
+    # ── Encabezado ──────────────────────────────────────────────────────
     def _build_header(self):
         hdr = ctk.CTkFrame(self.scroll, fg_color="transparent")
         hdr.pack(fill="x", padx=24, pady=(18, 14))
         SectionTitle(hdr, text="Volúmenes", text_color=T.TEXT).pack(anchor="w")
         ctk.CTkLabel(
             hdr, font=T.FONT_BODY, text_color=T.TEXT_MUTED, anchor="w",
-            text=("Carga los insumos base del proyecto. A partir del DEM inicial "
-                  "y los DEMs diarios (cargados en Vuelos y modelos DEM) se "
-                  "calcularán los ΔZ y volúmenes de corte/relleno por abscisa."),
+            text=("Carga los insumos base del proyecto. A partir del DEM inicial, "
+                  "el eje de la vía y el DEM final se calcularán los ΔZ y volúmenes "
+                  "de corte/relleno por abscisa."),
             wraplength=860,
         ).pack(anchor="w")
 
+    # ── Tarjetas de carga ────────────────────────────────────────────────
     def _build_upload_section(self):
         card = Card(self.scroll, title="Insumos base del proyecto", light=True)
         card.pack(fill="x", padx=20, pady=(0, 16))
@@ -54,30 +68,34 @@ class VolumenesView(ctk.CTkFrame):
             wraplength=860,
         ).pack(anchor="w", padx=18, pady=(0, 16))
 
-        cards_row = ctk.CTkFrame(card, fg_color="transparent")
-        cards_row.pack(padx=18, pady=(0, 22))
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.pack(padx=18, pady=(0, 22))
 
-        self._card_dem = UploadCard(
-            cards_row, 1, "Terreno Natural",
-            "DEM inicial  (GeoTIFF / XYZ)",
-            on_upload=self._upload_dem,
+        self._card_dem_ini = UploadCard(
+            row, 1, "DEM Inicial",
+            "Terreno natural  (GeoTIFF / .tif)",
+            on_upload=self._upload_dem_ini,
+            icon="🏔️",
         )
-        self._card_dem.grid(row=0, column=0, padx=14, pady=6)
+        self._card_dem_ini.grid(row=0, column=0, padx=14, pady=6)
 
         self._card_eje = UploadCard(
-            cards_row, 2, "Eje de la Vía",
+            row, 2, "Eje de la Vía",
             "Geometría del corredor  (DXF)",
             on_upload=self._upload_eje,
+            icon="🛣️",
         )
         self._card_eje.grid(row=0, column=1, padx=14, pady=6)
 
-        self._card_bordes = UploadCard(
-            cards_row, 3, "Bordes Laterales",
-            "Límites del área de trabajo  (DXF)",
-            on_upload=self._upload_bordes,
+        self._card_dem_final = UploadCard(
+            row, 3, "DEM Final",
+            "Volumen objetivo del proyecto  (.tif)",
+            on_upload=self._upload_dem_final,
+            icon="🎯",
         )
-        self._card_bordes.grid(row=0, column=2, padx=14, pady=6)
+        self._card_dem_final.grid(row=0, column=2, padx=14, pady=6)
 
+    # ── Estado de insumos ────────────────────────────────────────────────
     def _build_status_section(self):
         self._status_card = Card(
             self.scroll, title="Estado de los insumos", light=True)
@@ -86,10 +104,8 @@ class VolumenesView(ctk.CTkFrame):
             self._status_card, fg_color="transparent")
         self._status_body.pack(fill="x", padx=18, pady=(0, 16))
 
-        # Botones de acción
         btn_row = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        btn_row.pack(fill="x", padx=20, pady=(0, 28))
-
+        btn_row.pack(fill="x", padx=20, pady=(0, 20))
         self.btn_calc = ctk.CTkButton(
             btn_row, text="▶  Calcular Volúmenes ΔZ",
             height=44, width=260,
@@ -101,30 +117,96 @@ class VolumenesView(ctk.CTkFrame):
         )
         self.btn_calc.pack(side="right")
 
-        ctk.CTkButton(
-            btn_row, text="Generar DEMs de ejemplo",
-            height=44, width=220,
-            fg_color="transparent", border_width=1,
-            border_color=T.PRIMARY, text_color=T.PRIMARY,
-            hover_color=T.HOVER_BG, font=T.FONT_BODY,
-            command=self._demo,
-        ).pack(side="right", padx=(0, 10))
+    # ── Frentes de obra ──────────────────────────────────────────────────
+    def _build_frentes_section(self):
+        card = Card(self.scroll, title="Frentes de obra", light=True)
+        card.pack(fill="x", padx=20, pady=(0, 16))
 
-    # ── Upload handlers ─────────────────────────────────────────────────
-    def _upload_dem(self):
+        ctk.CTkLabel(
+            card,
+            text=("Define los tramos del proyecto acotados por abscisado. "
+                  "Se calculará el volumen de corte/relleno de forma independiente para cada frente."),
+            font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
+            wraplength=860,
+        ).pack(anchor="w", padx=18, pady=(0, 12))
+
+        # ── Formulario de ingreso ──────────────────────────────────────
+        form = ctk.CTkFrame(card, fg_color="transparent")
+        form.pack(fill="x", padx=18, pady=(0, 8))
+
+        self._ent_nombre = ctk.CTkEntry(
+            form, placeholder_text="Nombre del frente",
+            width=190, height=34, font=T.FONT_BODY,
+        )
+        self._ent_nombre.grid(row=0, column=0, padx=(0, 8))
+
+        self._ent_abs_ini = ctk.CTkEntry(
+            form, placeholder_text="Abscisa inicio (m)",
+            width=150, height=34, font=T.FONT_BODY,
+        )
+        self._ent_abs_ini.grid(row=0, column=1, padx=(0, 8))
+
+        self._ent_abs_fin = ctk.CTkEntry(
+            form, placeholder_text="Abscisa fin (m)",
+            width=150, height=34, font=T.FONT_BODY,
+        )
+        self._ent_abs_fin.grid(row=0, column=2, padx=(0, 8))
+
+        ctk.CTkButton(
+            form, text="+ Agregar", width=110, height=34,
+            font=T.FONT_BODY,
+            fg_color=T.SUCCESS, hover_color=T.SUCCESS_HOV,
+            text_color="white",
+            command=self._add_frente,
+        ).grid(row=0, column=3)
+
+        # ── Divisor ───────────────────────────────────────────────────
+        ctk.CTkFrame(card, height=1, fg_color=T.CARD_BORDER).pack(
+            fill="x", padx=18, pady=(8, 6))
+
+        # ── Lista dinámica de frentes ──────────────────────────────────
+        self._frentes_list_frame = ctk.CTkFrame(card, fg_color="transparent")
+        self._frentes_list_frame.pack(fill="x", padx=18, pady=(0, 8))
+
+        # ── Botón recalcular ───────────────────────────────────────────
+        btn_row = ctk.CTkFrame(card, fg_color="transparent")
+        btn_row.pack(fill="x", padx=18, pady=(4, 14))
+
+        self.btn_recalc = ctk.CTkButton(
+            btn_row,
+            text="⟳  Recalcular Volúmenes por Frente",
+            height=40, width=300,
+            font=T.FONT_H2,
+            fg_color=T.PRIMARY, hover_color=T.PRIMARY_HOV,
+            text_color=T.TEXT_ON_DARK,
+            command=self._recalcular_frentes,
+        )
+        self.btn_recalc.pack(side="right")
+
+        self._refresh_frentes_ui()
+
+    # ── Resultados por frente ────────────────────────────────────────────
+    def _build_resultados_section(self):
+        self._res_card = Card(
+            self.scroll, title="Resultados por frente", light=True)
+        self._res_card.pack(fill="x", padx=20, pady=(0, 32))
+        self._res_body = ctk.CTkFrame(self._res_card, fg_color="transparent")
+        self._res_body.pack(fill="x", padx=18, pady=(0, 16))
+        self._refresh_resultados()
+
+    # ── Upload handlers ──────────────────────────────────────────────────
+    def _upload_dem_ini(self):
         path = filedialog.askopenfilename(
-            title="Seleccionar DEM inicial",
-            filetypes=[
-                ("GeoTIFF / XYZ", "*.tif *.tiff *.xyz *.TIF *.TIFF"),
-                ("Todos los archivos", "*.*"),
-            ],
+            title="Seleccionar DEM Inicial",
+            filetypes=[("GeoTIFF", "*.tif *.tiff *.TIF *.TIFF"),
+                       ("Todos los archivos", "*.*")],
         )
         if not path:
             return
         try:
             dest = self._ensure_baseline() / "dem_baseline.tif"
             shutil.copy2(path, dest)
-            self._card_dem.set_loaded(dest)
+            self._card_dem_ini.set_loaded(dest)
             self._refresh_status()
         except Exception as exc:
             messagebox.showerror("Error al copiar archivo", str(exc))
@@ -132,10 +214,8 @@ class VolumenesView(ctk.CTkFrame):
     def _upload_eje(self):
         path = filedialog.askopenfilename(
             title="Seleccionar eje de la vía",
-            filetypes=[
-                ("AutoCAD DXF", "*.dxf *.DXF"),
-                ("Todos los archivos", "*.*"),
-            ],
+            filetypes=[("AutoCAD DXF", "*.dxf *.DXF"),
+                       ("Todos los archivos", "*.*")],
         )
         if not path:
             return
@@ -147,20 +227,18 @@ class VolumenesView(ctk.CTkFrame):
         except Exception as exc:
             messagebox.showerror("Error al copiar archivo", str(exc))
 
-    def _upload_bordes(self):
+    def _upload_dem_final(self):
         path = filedialog.askopenfilename(
-            title="Seleccionar bordes laterales",
-            filetypes=[
-                ("AutoCAD DXF", "*.dxf *.DXF"),
-                ("Todos los archivos", "*.*"),
-            ],
+            title="Seleccionar DEM Final (volumen objetivo)",
+            filetypes=[("GeoTIFF", "*.tif *.tiff *.TIF *.TIFF"),
+                       ("Todos los archivos", "*.*")],
         )
         if not path:
             return
         try:
-            dest = self._ensure_baseline() / "bordes_laterales.dxf"
+            dest = self._ensure_baseline() / "dem_final.tif"
             shutil.copy2(path, dest)
-            self._card_bordes.set_loaded(dest)
+            self._card_dem_final.set_loaded(dest)
             self._refresh_status()
         except Exception as exc:
             messagebox.showerror("Error al copiar archivo", str(exc))
@@ -179,27 +257,22 @@ class VolumenesView(ctk.CTkFrame):
                 return p
         return None
 
-    def _bordes_path(self) -> Path | None:
-        bd = self.state.baseline_dir
-        for ext in ("dxf", "DXF"):
-            p = bd / f"bordes_laterales.{ext}"
-            if p.exists():
-                return p
-        return None
+    def _dem_final_path(self) -> Path | None:
+        return self.state.dem_final_path()
 
     # ── Refresco de estado ───────────────────────────────────────────────
     def _refresh_status(self):
         for w in self._status_body.winfo_children():
             w.destroy()
 
-        dem    = self.state.dem_baseline_path()
-        eje    = self._eje_path()
-        bordes = self._bordes_path()
+        dem_ini   = self.state.dem_baseline_path()
+        eje       = self._eje_path()
+        dem_final = self._dem_final_path()
 
         items = [
-            ("DEM Inicial",       "dem_baseline.tif",        dem),
-            ("Eje de la Vía",     "eje_via.dxf",             eje),
-            ("Bordes Laterales",  "bordes_laterales.dxf",    bordes),
+            ("DEM Inicial",   "dem_baseline.tif", dem_ini),
+            ("Eje de la Vía", "eje_via.dxf",      eje),
+            ("DEM Final",     "dem_final.tif",     dem_final),
         ]
         all_ok = True
         for nombre, archivo, path in items:
@@ -216,20 +289,226 @@ class VolumenesView(ctk.CTkFrame):
                 text_color=T.TEXT, anchor="w",
             ).pack(side="left", padx=(4, 6))
             ctk.CTkLabel(
-                row, text=f"({archivo})" if not ok else str(path),
+                row,
+                text=f"({archivo})" if not ok else str(path),
                 font=T.FONT_TINY, text_color=T.TEXT_MUTED, anchor="w",
             ).pack(side="left")
 
         self.btn_calc.configure(state="normal" if all_ok else "disabled")
 
     def refresh(self):
-        dem    = self.state.dem_baseline_path()
-        eje    = self._eje_path()
-        bordes = self._bordes_path()
-        self._card_dem.set_loaded(dem)
+        dem_ini   = self.state.dem_baseline_path()
+        eje       = self._eje_path()
+        dem_final = self._dem_final_path()
+        self._card_dem_ini.set_loaded(dem_ini)
         self._card_eje.set_loaded(eje)
-        self._card_bordes.set_loaded(bordes)
+        self._card_dem_final.set_loaded(dem_final)
         self._refresh_status()
+
+    # ── Frentes: lista dinámica ──────────────────────────────────────────
+    def _refresh_frentes_ui(self):
+        for w in self._frentes_list_frame.winfo_children():
+            w.destroy()
+
+        frentes = self.state.load_frentes()
+
+        if not frentes:
+            ctk.CTkLabel(
+                self._frentes_list_frame,
+                text="No hay frentes definidos. Usa el formulario para agregar tramos.",
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
+            ).pack(anchor="w", pady=10)
+            return
+
+        # Cabecera de columnas
+        _COLS = [
+            ("NOMBRE",    220, "w"),
+            ("INICIO",    120, "w"),
+            ("FIN",       120, "w"),
+            ("LONGITUD",  110, "w"),
+            ("",           48, "center"),
+        ]
+        hdr = ctk.CTkFrame(self._frentes_list_frame, fg_color="transparent")
+        hdr.pack(fill="x", pady=(2, 4))
+        for col_i, (txt, w, anchor) in enumerate(_COLS):
+            ctk.CTkLabel(
+                hdr, text=txt, font=T.FONT_TINY,
+                text_color=T.TEXT_MUTED, width=w, anchor=anchor,
+            ).grid(row=0, column=col_i, sticky="w", padx=4)
+
+        for i, fr in enumerate(frentes):
+            nombre     = str(fr.get("nombre", f"Frente {i + 1}"))
+            abs_ini    = float(fr.get("abs_ini", 0))
+            abs_fin    = float(fr.get("abs_fin", 0))
+            longitud   = abs_fin - abs_ini
+
+            row = ctk.CTkFrame(
+                self._frentes_list_frame,
+                fg_color=T.TABLE_HOVER if i % 2 == 0 else "transparent",
+                corner_radius=6,
+            )
+            row.pack(fill="x", pady=2)
+
+            ctk.CTkLabel(
+                row, text=f"  {nombre}",
+                font=(T.FONT_FAMILY, 11, "bold"),
+                text_color=T.TEXT, width=220, anchor="w",
+            ).grid(row=0, column=0, padx=4, pady=6)
+
+            ctk.CTkLabel(
+                row, text=_km_str(abs_ini),
+                font=T.FONT_BODY, text_color=T.TEXT_MUTED,
+                width=120, anchor="w",
+            ).grid(row=0, column=1, padx=4)
+
+            ctk.CTkLabel(
+                row, text=_km_str(abs_fin),
+                font=T.FONT_BODY, text_color=T.TEXT_MUTED,
+                width=120, anchor="w",
+            ).grid(row=0, column=2, padx=4)
+
+            ctk.CTkLabel(
+                row, text=f"{longitud:,.0f} m",
+                font=T.FONT_BODY, text_color=T.TEXT_MUTED,
+                width=110, anchor="w",
+            ).grid(row=0, column=3, padx=4)
+
+            def _make_del(idx=i):
+                return lambda: self._remove_frente(idx)
+
+            ctk.CTkButton(
+                row, text="✕", width=32, height=26,
+                fg_color="transparent",
+                hover_color=("#FEE2E2", "#7F1D1D"),
+                text_color=T.DANGER,
+                font=(T.FONT_FAMILY, 11, "bold"),
+                command=_make_del(),
+            ).grid(row=0, column=4, padx=(0, 4))
+
+    def _add_frente(self):
+        nombre      = self._ent_nombre.get().strip()
+        abs_ini_str = self._ent_abs_ini.get().strip()
+        abs_fin_str = self._ent_abs_fin.get().strip()
+
+        if not nombre:
+            messagebox.showwarning(
+                "Campo requerido", "El nombre del frente no puede estar vacío.")
+            return
+        try:
+            abs_ini = float(abs_ini_str)
+            abs_fin = float(abs_fin_str)
+        except ValueError:
+            messagebox.showwarning(
+                "Valor inválido",
+                "Las abscisas deben ser números en metros.\n"
+                "Ejemplo: 2600  y  3200")
+            return
+        if abs_fin <= abs_ini:
+            messagebox.showwarning(
+                "Abscisas inválidas",
+                "La abscisa fin debe ser mayor que la abscisa inicio.")
+            return
+
+        frentes = self.state.load_frentes()
+        frentes.append({"nombre": nombre, "abs_ini": abs_ini, "abs_fin": abs_fin})
+        self.state.save_frentes(frentes)
+
+        self._ent_nombre.delete(0, "end")
+        self._ent_abs_ini.delete(0, "end")
+        self._ent_abs_fin.delete(0, "end")
+        self._refresh_frentes_ui()
+
+    def _remove_frente(self, idx: int):
+        frentes = self.state.load_frentes()
+        if 0 <= idx < len(frentes):
+            frentes.pop(idx)
+            self.state.save_frentes(frentes)
+            self._refresh_frentes_ui()
+
+    # ── Resultados ───────────────────────────────────────────────────────
+    def _refresh_resultados(self, ok: bool = True):
+        for w in self._res_body.winfo_children():
+            w.destroy()
+
+        resultados = self.state.load_frentes_resultado()
+
+        if not resultados:
+            ctk.CTkLabel(
+                self._res_body,
+                text=(
+                    "Sin resultados. Carga los tres insumos, define al menos un frente "
+                    "y haz clic en '⟳ Recalcular'."
+                ),
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
+            ).pack(anchor="w", pady=14)
+            return
+
+        _COLS = [
+            ("FRENTE",        200),
+            ("INICIO",        110),
+            ("FIN",           110),
+            ("CORTE (m³)",    130),
+            ("RELLENO (m³)",  140),
+            ("BALANCE (m³)",  130),
+        ]
+
+        # Cabecera
+        hdr = ctk.CTkFrame(self._res_body, fg_color="transparent")
+        hdr.pack(fill="x", pady=(4, 2))
+        for col_i, (txt, w) in enumerate(_COLS):
+            ctk.CTkLabel(
+                hdr, text=txt, font=T.FONT_TINY,
+                text_color=T.TEXT_MUTED, width=w, anchor="w",
+            ).grid(row=0, column=col_i, sticky="w", padx=4)
+
+        ctk.CTkFrame(self._res_body, height=1,
+                     fg_color=T.CARD_BORDER).pack(fill="x", pady=(0, 4))
+
+        for j, r in enumerate(resultados):
+            is_total = r.get("nombre") == "TOTAL"
+
+            if is_total:
+                ctk.CTkFrame(self._res_body, height=1,
+                             fg_color=T.CARD_BORDER).pack(fill="x", pady=(4, 4))
+
+            row = ctk.CTkFrame(
+                self._res_body,
+                fg_color=(
+                    "transparent" if is_total
+                    else (T.TABLE_HOVER if j % 2 == 0 else "transparent")
+                ),
+                corner_radius=6 if not is_total else 0,
+            )
+            row.pack(fill="x", pady=(2 if not is_total else 4))
+
+            nombre     = str(r.get("nombre", ""))
+            abs_ini    = r.get("abs_ini")
+            abs_fin    = r.get("abs_fin")
+            corte      = float(r.get("corte_m3", 0))
+            relleno    = float(r.get("relleno_m3", 0))
+            balance    = float(r.get("balance_m3", 0))
+
+            ini_str = _km_str(abs_ini) if abs_ini is not None else "—"
+            fin_str = _km_str(abs_fin) if abs_fin is not None else "—"
+            bal_str = f"{balance:+,.0f}"
+            bal_color = T.DANGER if balance < 0 else T.SUCCESS
+
+            font_n = (T.FONT_FAMILY, 11, "bold") if is_total else T.FONT_BODY
+
+            cells = [
+                (f"  {nombre}",        T.TEXT,           font_n),
+                (ini_str,              T.TEXT_MUTED,     T.FONT_BODY),
+                (fin_str,              T.TEXT_MUTED,     T.FONT_BODY),
+                (_fmt_vol(corte),      T.CORTE_COLOR,    font_n),
+                (_fmt_vol(relleno),    T.RELLENO_COLOR,  font_n),
+                (bal_str,              bal_color,        font_n),
+            ]
+            widths = [w for _, w in _COLS]
+            for col_i, ((txt, color, font), w) in enumerate(zip(cells, widths)):
+                ctk.CTkLabel(
+                    row, text=txt, font=font,
+                    text_color=color, width=w, anchor="w",
+                ).grid(row=0, column=col_i, sticky="w", padx=4, pady=6)
 
     # ── Acciones ─────────────────────────────────────────────────────────
     def _calcular(self):
@@ -240,24 +519,28 @@ class VolumenesView(ctk.CTkFrame):
             popen_factory=self.state.run_odm,
         )
 
-    def _demo(self):
-        if not messagebox.askyesno(
-            "Generar DEMs de ejemplo",
-            "Esto creará dem_pre.tif y dem_post.tif sintéticos en 02_dron_odm/.\n"
-            "¿Continuar?",
-        ):
+    def _recalcular_frentes(self):
+        if not all([self.state.dem_baseline_path(),
+                    self._eje_path(),
+                    self._dem_final_path()]):
+            messagebox.showwarning(
+                "Insumos faltantes",
+                "Carga el DEM Inicial, Eje de la Vía y DEM Final antes de calcular.",
+            )
             return
-        import subprocess
+
+        frentes = self.state.load_frentes()
+        if not frentes:
+            messagebox.showwarning(
+                "Sin frentes",
+                "Define al menos un frente de obra antes de recalcular.",
+            )
+            return
+
         from .runner import ProcessDialog
         ProcessDialog(
             self.winfo_toplevel(),
-            titulo="Generando DEMs de ejemplo",
-            popen_factory=lambda: subprocess.Popen(
-                [self.state.python_exe(), str(self.state.gen_dems_script)],
-                cwd=str(self.state.gen_dems_script.parent),
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                bufsize=1, text=True, encoding="utf-8", errors="replace",
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            ),
-            on_done=lambda ok: (ok and self.refresh()),
+            titulo="Calculando Volúmenes por Frente",
+            popen_factory=self.state.run_volumen_frentes,
+            on_done=lambda ok: self.after(0, self._refresh_resultados, ok),
         )

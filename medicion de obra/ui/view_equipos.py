@@ -15,6 +15,25 @@ TIPOS_EQUIPO = [
     "Excavadora", "Bulldozer", "Motoniveladora",
     "Volqueta", "Vibrocompactador",
 ]
+
+_NO_FRENTE = "— Sin frente asignado —"
+
+
+def _km_str(m: float) -> str:
+    m_int = int(m)
+    return f"K{m_int // 1000}+{m_int % 1000:03d}"
+
+
+def _frente_label(fr: dict) -> str:
+    """Texto del dropdown para un frente: 'Nombre  (Kx+xxx → Ky+yyy)'."""
+    ini = _km_str(float(fr["abs_ini"]))
+    fin = _km_str(float(fr["abs_fin"]))
+    return f"{fr['nombre']}  ({ini} → {fin})"
+
+
+def _frente_tramo_str(fr: dict) -> str:
+    """Cadena corta de tramo para mostrar en chips: 'Kx+xxx - Ky+yyy'."""
+    return f"{_km_str(float(fr['abs_ini']))} - {_km_str(float(fr['abs_fin']))}"
 UNIDAD_DEFECTO = {
     "Excavadora":      "m³",
     "Bulldozer":       "m³",
@@ -244,10 +263,11 @@ class EquiposView(ctk.CTkFrame):
     # TAB 2 — Flotas
     # ═══════════════════════════════════════════════════════════════════
     def _render_flotas(self):
-        data = self.state.load_equipos_data()
-        flotas = data.get("flotas", [])
-        equipos_map = {e["id"]: e for e in data.get("equipos", [])}
+        data    = self.state.load_equipos_data()
+        flotas  = data.get("flotas", [])
+        equipos_map  = {e["id"]: e for e in data.get("equipos", [])}
         equipos_list = list(equipos_map.values())
+        frentes = self.state.load_frentes()
 
         # ── Formulario de nueva flota ──────────────────────────────────
         form_card = Card(self.content, title="Crear nueva flota", light=True)
@@ -256,22 +276,37 @@ class EquiposView(ctk.CTkFrame):
         form.pack(fill="x", padx=18, pady=(0, 14))
         form.grid_columnconfigure((0, 1), weight=1)
 
-        for c, (lbl, ph) in enumerate([
-            ("Nombre de la flota", "Ej: Flota Frente A"),
-            ("Tramo / Frente",     "Ej: K0+000 - K2+500"),
-        ]):
-            ctk.CTkLabel(form, text=lbl, font=T.FONT_SMALL,
-                         text_color=T.TEXT_MUTED, anchor="w").grid(
-                             row=0, column=c, sticky="w", padx=4, pady=(0, 2))
+        # Etiquetas
+        ctk.CTkLabel(form, text="Nombre de la flota", font=T.FONT_SMALL,
+                     text_color=T.TEXT_MUTED, anchor="w").grid(
+                         row=0, column=0, sticky="w", padx=4, pady=(0, 2))
+        ctk.CTkLabel(form, text="Frente de obra", font=T.FONT_SMALL,
+                     text_color=T.TEXT_MUTED, anchor="w").grid(
+                         row=0, column=1, sticky="w", padx=4, pady=(0, 2))
+
+        # Inputs fila 1
         e_nombre = ctk.CTkEntry(form, placeholder_text="Ej: Flota Frente A",
                                 fg_color=T.INPUT_BG, text_color=T.TEXT,
                                 border_color=T.CARD_BORDER)
         e_nombre.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 8))
-        e_tramo = ctk.CTkEntry(form, placeholder_text="Ej: K0+000 - K2+500",
-                               fg_color=T.INPUT_BG, text_color=T.TEXT,
-                               border_color=T.CARD_BORDER)
-        e_tramo.grid(row=1, column=1, sticky="ew", padx=4, pady=(0, 8))
 
+        frente_var = ctk.StringVar(value=_NO_FRENTE)
+        if frentes:
+            frente_options = [_NO_FRENTE] + [_frente_label(fr) for fr in frentes]
+            ctk.CTkOptionMenu(
+                form, values=frente_options, variable=frente_var,
+                fg_color=T.INPUT_BG, button_color=T.INPUT_BG,
+                button_hover_color=T.INPUT_HOVER, text_color=T.TEXT,
+                dropdown_fg_color=T.CARD_BG, dropdown_text_color=T.TEXT,
+            ).grid(row=1, column=1, sticky="ew", padx=4, pady=(0, 8))
+        else:
+            ctk.CTkLabel(
+                form,
+                text="⚠  No hay frentes definidos — ve a Volúmenes para crearlos.",
+                font=T.FONT_SMALL, text_color=T.WARNING, anchor="w",
+            ).grid(row=1, column=1, sticky="w", padx=4, pady=(0, 8))
+
+        # Checkboxes de equipos
         chk_vars: dict[str, ctk.BooleanVar] = {}
         if equipos_list:
             ctk.CTkLabel(form, text="Equipos a asignar",
@@ -285,7 +320,7 @@ class EquiposView(ctk.CTkFrame):
                 chk_vars[eq["id"]] = v
                 ctk.CTkCheckBox(
                     chk_frame,
-                    text=f"{eq.get('nombre','')}  ({eq.get('tipo','')})",
+                    text=f"{eq.get('nombre', '')}  ({eq.get('tipo', '')})",
                     variable=v, font=T.FONT_BODY, text_color=T.TEXT,
                     fg_color=T.PRIMARY, hover_color=T.PRIMARY_HOV,
                     border_color=T.CARD_BORDER,
@@ -302,12 +337,27 @@ class EquiposView(ctk.CTkFrame):
             if not nombre:
                 msg_var.set("El nombre es obligatorio")
                 return
+
+            # Resolver frente seleccionado
+            sel = frente_var.get()
+            frente_data: dict | None = None
+            if frentes and sel != _NO_FRENTE:
+                for fr in frentes:
+                    if _frente_label(fr) == sel:
+                        frente_data = fr
+                        break
+
+            tramo_str = _frente_tramo_str(frente_data) if frente_data else ""
+
             d = self.state.load_equipos_data()
             d["flotas"].append({
-                "id": f"fl_{uuid.uuid4().hex[:8]}",
-                "nombre": nombre,
-                "tramo": e_tramo.get().strip(),
-                "equipo_ids": [eid for eid, v in chk_vars.items() if v.get()],
+                "id":            f"fl_{uuid.uuid4().hex[:8]}",
+                "nombre":        nombre,
+                "tramo":         tramo_str,
+                "frente_nombre": frente_data["nombre"] if frente_data else "",
+                "frente_abs_ini": float(frente_data["abs_ini"]) if frente_data else None,
+                "frente_abs_fin": float(frente_data["abs_fin"]) if frente_data else None,
+                "equipo_ids":    [eid for eid, v in chk_vars.items() if v.get()],
             })
             self.state.save_equipos_data(d)
             if self.on_updated:
@@ -340,15 +390,35 @@ class EquiposView(ctk.CTkFrame):
 
                 top_row = ctk.CTkFrame(row_frame, fg_color="transparent")
                 top_row.pack(fill="x", padx=12, pady=(8, 2))
+
                 ctk.CTkLabel(
-                    top_row, text=f"🏗  {flota.get('nombre','')}",
+                    top_row, text=f"🏗  {flota.get('nombre', '')}",
                     font=T.FONT_H2, text_color=T.TEXT,
                 ).pack(side="left")
-                if flota.get("tramo"):
+
+                # Badge de frente (si tiene frente asignado)
+                frente_n = flota.get("frente_nombre", "")
+                tramo    = flota.get("tramo", "")
+                if frente_n:
+                    badge = ctk.CTkFrame(
+                        top_row,
+                        fg_color=("#E0E7FF", "#1e2a4a"),
+                        corner_radius=6,
+                    )
+                    badge.pack(side="left", padx=(10, 0))
                     ctk.CTkLabel(
-                        top_row, text=flota["tramo"],
+                        badge,
+                        text=f"📍 {frente_n}  {tramo}",
+                        font=T.FONT_TINY,
+                        text_color=(T.PRIMARY, "#93c5fd"),
+                        padx=8, pady=2,
+                    ).pack()
+                elif tramo:
+                    ctk.CTkLabel(
+                        top_row, text=tramo,
                         font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
                     ).pack(side="left", padx=(10, 0))
+
                 ctk.CTkButton(
                     top_row, text="✕ Eliminar", width=80, height=26,
                     fg_color=T.DANGER, hover_color=T.DANGER_HOV,
@@ -356,15 +426,17 @@ class EquiposView(ctk.CTkFrame):
                     command=lambda fid=flota["id"]: self._eliminar_flota(fid),
                 ).pack(side="right")
 
+                # Chips de equipos
                 chip_row = ctk.CTkFrame(row_frame, fg_color="transparent")
                 chip_row.pack(fill="x", padx=12, pady=(0, 8))
-                eqs = [equipos_map.get(eid) for eid in flota.get("equipo_ids", [])
+                eqs = [equipos_map.get(eid)
+                       for eid in flota.get("equipo_ids", [])
                        if equipos_map.get(eid)]
                 if eqs:
                     for eq in eqs:
                         ctk.CTkLabel(
                             chip_row,
-                            text=f"  {eq.get('nombre','')}  ",
+                            text=f"  {eq.get('nombre', '')}  ",
                             font=T.FONT_TINY, corner_radius=6,
                             fg_color=T.CARD_BG, text_color=T.TEXT,
                         ).pack(side="left", padx=(0, 4))
@@ -372,8 +444,8 @@ class EquiposView(ctk.CTkFrame):
                     ctk.CTkLabel(chip_row, text="Sin equipos asignados",
                                  font=T.FONT_SMALL,
                                  text_color=T.TEXT_FAINT).pack(side="left")
-            ctk.CTkFrame(list_card, height=8,
-                         fg_color="transparent").pack()
+
+            ctk.CTkFrame(list_card, height=8, fg_color="transparent").pack()
 
     def _eliminar_flota(self, flota_id: str):
         d = self.state.load_equipos_data()
@@ -441,8 +513,8 @@ class EquiposView(ctk.CTkFrame):
 
         tbl_frame = ctk.CTkFrame(entry_card, fg_color="transparent")
         tbl_frame.pack(fill="x", padx=18, pady=(0, 8))
-        COL_WIDTHS = [150, 120, 140, 120, 110, 75, 145]
-        COL_HDRS = ["Equipo", "Tipo", "Flota",
+        COL_WIDTHS = [150, 110, 190, 120, 110, 75, 145]
+        COL_HDRS = ["Equipo", "Tipo", "Flota / Frente",
                     "Horas trabajadas", "Producción",
                     "Unidad", "Rendimiento calc."]
         for c, (hdr, w) in enumerate(zip(COL_HDRS, COL_WIDTHS)):
@@ -456,11 +528,13 @@ class EquiposView(ctk.CTkFrame):
         row_entries: list[dict] = []
         for r_idx, eq in enumerate(equipos_list):
             fl = eq_to_flota.get(eq["id"])
-            flota_name = fl["nombre"] if fl else "Sin flota"
+            flota_name  = fl["nombre"] if fl else "Sin flota"
+            frente_n    = fl.get("frente_nombre", "") if fl else ""
+            flota_cell  = f"{flota_name}  ·  {frente_n}" if frente_n else flota_name
             for c, (txt, color) in enumerate([
                 (eq.get("nombre", ""), T.TEXT),
                 (eq.get("tipo", ""),   T.TEXT_MUTED),
-                (flota_name,           T.TEXT_MUTED),
+                (flota_cell,           T.PRIMARY if frente_n else T.TEXT_MUTED),
             ]):
                 ctk.CTkLabel(tbl_frame, text=txt, font=T.FONT_BODY,
                              text_color=color, anchor="w").grid(
@@ -538,6 +612,8 @@ class EquiposView(ctk.CTkFrame):
                     "equipo_tipo": eq.get("tipo", ""),
                     "flota_id": fl["id"] if fl else "",
                     "flota_nombre": fl["nombre"] if fl else "Sin flota",
+                    "frente_nombre": fl.get("frente_nombre", "") if fl else "",
+                    "frente_tramo": fl.get("tramo", "") if fl else "",
                     "horas_trabajadas": h,
                     "produccion": p,
                     "unidad_produccion": eq.get("unidad_produccion", "m³"),
@@ -624,10 +700,10 @@ class EquiposView(ctk.CTkFrame):
 
         tbl = DataTable(
             tbl_card,
-            columns=["Equipo", "Tipo", "Flota", "Fecha",
+            columns=["Equipo", "Tipo", "Flota", "Frente", "Fecha",
                      "Horas", "Producción", "Rend. hoy",
                      "Rend. ayer", "Variación"],
-            widths=[130, 110, 120, 85, 65, 100, 100, 90, 90],
+            widths=[120, 100, 110, 120, 80, 60, 90, 90, 80, 80],
         )
         tbl.pack(fill="x", padx=18, pady=(0, 14))
 
@@ -635,15 +711,17 @@ class EquiposView(ctk.CTkFrame):
             fecha_str = (r["fecha"].strftime("%d/%m/%Y")
                          if pd.notna(r["fecha"]) else "—")
             u = r.get("unidad_produccion", "m³")
-            prod_val = r.get("produccion")
-            rend_val = r.get("rendimiento")
+            prod_val    = r.get("produccion")
+            rend_val    = r.get("rendimiento")
             rend_ant_val = r.get("rend_anterior")
-            horas_val = r.get("horas_trabajadas")
+            horas_val   = r.get("horas_trabajadas")
+            frente_n    = r.get("frente_nombre", "") if "frente_nombre" in r else ""
 
-            prod_str = f"{prod_val:,.1f} {u}" if pd.notna(prod_val) else "—"
-            rend_str = f"{rend_val:.2f} {u}/h" if pd.notna(rend_val) else "—"
+            prod_str     = f"{prod_val:,.1f} {u}" if pd.notna(prod_val) else "—"
+            rend_str     = f"{rend_val:.2f} {u}/h" if pd.notna(rend_val) else "—"
             rend_ant_str = f"{rend_ant_val:.2f}" if pd.notna(rend_ant_val) else "—"
-            horas_str = f"{horas_val:.1f} h" if pd.notna(horas_val) else "—"
+            horas_str    = f"{horas_val:.1f} h" if pd.notna(horas_val) else "—"
+            frente_str   = str(frente_n) if frente_n and pd.notna(frente_n) else "—"
 
             var_pct = r.get("variacion_pct")
             if pd.notna(var_pct):
@@ -663,6 +741,7 @@ class EquiposView(ctk.CTkFrame):
                 r.get("equipo_nombre", ""),
                 r.get("equipo_tipo", ""),
                 r.get("flota_nombre", ""),
+                frente_str,
                 fecha_str, horas_str, prod_str,
                 rend_str, rend_ant_str, var_lbl,
             ])
@@ -677,28 +756,36 @@ class EquiposView(ctk.CTkFrame):
             latest_date = df_raw["fecha"].max()
             day_df = df_raw[df_raw["fecha"] == latest_date]
             if not day_df.empty:
+                has_frente = "frente_nombre" in day_df.columns
+
+                agg_cols: dict = {
+                    "equipos":          ("equipo_nombre", "nunique"),
+                    "horas_totales":    ("horas_trabajadas", "sum"),
+                    "produccion_total": ("produccion", "sum"),
+                }
+                group_by = ["flota_nombre"]
+                if has_frente:
+                    agg_cols["frente_n"] = ("frente_nombre", "first")
+
                 grouped = (
-                    day_df.groupby("flota_nombre")
-                    .agg(
-                        equipos=("equipo_nombre", "nunique"),
-                        horas_totales=("horas_trabajadas", "sum"),
-                        produccion_total=("produccion", "sum"),
-                    )
+                    day_df.groupby(group_by)
+                    .agg(**agg_cols)
                     .reset_index()
                 )
-                s_tbl = DataTable(
-                    sum_card,
-                    columns=["Flota", "Equipos", "Horas totales",
-                             "Producción total", "Rend. flota"],
-                    widths=[180, 80, 120, 140, 130],
-                )
+
+                col_names = ["Flota", "Frente", "Equipos",
+                             "Horas totales", "Producción total", "Rend. flota"]
+                col_widths = [160, 130, 70, 110, 130, 120]
+                s_tbl = DataTable(sum_card, columns=col_names, widths=col_widths)
                 s_tbl.pack(fill="x", padx=18, pady=(0, 14))
                 for _, row in grouped.iterrows():
                     ht = float(row["horas_totales"])
                     pt = float(row["produccion_total"])
                     rf = pt / ht if ht > 0 else 0.0
+                    fn = str(row.get("frente_n", "") or "—") if has_frente else "—"
                     s_tbl.add_row([
                         row["flota_nombre"],
+                        fn,
                         str(int(row["equipos"])),
                         f"{ht:.1f} h",
                         f"{pt:,.1f}",

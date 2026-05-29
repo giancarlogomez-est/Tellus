@@ -36,6 +36,8 @@ class ProjectState:
         self.gen_dems_script: Path = base / "02_dron_odm" / "generar_dems_ejemplo.py"
         self.equipos_path: Path = base / "equipos.json"
         self.registros_equipos_path: Path = base / "registros_equipos.csv"
+        self.calcular_frentes_script: Path = base / "calcular_volumen_frentes.py"
+        self.frentes_resultado_path_file: Path = base / "baseline" / "frentes_resultado.json"
 
     # ── Configuración ────────────────────────────────────────────────────
     def load_config(self) -> Optional[dict]:
@@ -60,6 +62,8 @@ class ProjectState:
         if not any((self.baseline_dir / f"eje_via.{ext}").exists()
                    for ext in ("dxf", "dwg", "geojson")):
             falt.append("eje_via.(dxf|dwg|geojson)")
+        if not (self.baseline_dir / "dem_final.tif").exists():
+            falt.append("dem_final.tif")
         return (not falt), falt
 
     # ── Registro de vuelos ───────────────────────────────────────────────
@@ -137,6 +141,42 @@ class ProjectState:
             if p.exists():
                 return p
         return None
+
+    def dem_final_path(self) -> Optional[Path]:
+        for ext in ("tif", "tiff"):
+            p = self.baseline_dir / f"dem_final.{ext}"
+            if p.exists():
+                return p
+        return None
+
+    # ── Frentes de obra ──────────────────────────────────────────────────
+    def load_frentes(self) -> list[dict]:
+        cfg = self.load_config() or {}
+        return list(cfg.get("frentes", []))
+
+    def save_frentes(self, frentes: list[dict]) -> None:
+        cfg = self.load_config() or {}
+        cfg["frentes"] = frentes
+        self.save_config(cfg)
+
+    def frentes_resultado_path(self) -> Optional[Path]:
+        p = self.frentes_resultado_path_file
+        return p if p.exists() else None
+
+    def load_frentes_resultado(self) -> list[dict]:
+        p = self.frentes_resultado_path()
+        if p is None:
+            return []
+        return json.loads(p.read_text(encoding="utf-8"))
+
+    def run_volumen_frentes(self) -> subprocess.Popen:
+        return subprocess.Popen(
+            [self.python_exe(), str(self.calcular_frentes_script)],
+            cwd=str(self.base), env=_utf8_env(),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            bufsize=1, text=True, encoding="utf-8", errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
 
     def import_dem(self, src_path: str, fecha: str) -> None:
         """Copia un .tif como vuelos/<fecha>/dsm.tif."""

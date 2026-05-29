@@ -241,7 +241,8 @@ class UploadCard(tk.Frame):
     """
 
     def __init__(self, master, number: int, label: str, fmt: str,
-                 on_upload, loaded_path: "Path | None" = None, **kw):
+                 on_upload, loaded_path: "Path | None" = None,
+                 icon: str = "📂", **kw):
         bg = T.mc(T.CARD_BG)
         super().__init__(master, width=_UPLOAD_CARD_W, height=_UPLOAD_CARD_H,
                          bg=bg, **kw)
@@ -253,10 +254,10 @@ class UploadCard(tk.Frame):
         self._canvas.place(x=0, y=0)
         self._draw_border(loaded_path is not None)
 
-        # Icono OVNI
+        # Ícono personalizable
         self._canvas.create_text(
             _UPLOAD_CARD_W // 2, 68,
-            text="🛸", font=("Segoe UI Emoji", 34),
+            text=icon, font=("Segoe UI Emoji", 34),
             fill=_UPLOAD_AMBER, tags="click",
         )
         # Número + nombre
