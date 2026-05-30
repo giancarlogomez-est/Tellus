@@ -496,7 +496,7 @@ class DashboardView(ctk.CTkFrame):
     def _render_frentes(self):
         for w in self.fr_box.winfo_children():
             w.destroy()
-        resultados = self.state.load_frentes_resultado()
+        resultados, _fecha_res, _modo_res = self.state.load_frentes_resultado()
         total_row = next((r for r in resultados if r.get("nombre") == "TOTAL"), None)
         datos = [r for r in resultados if r.get("nombre") != "TOTAL"]
         if not datos:

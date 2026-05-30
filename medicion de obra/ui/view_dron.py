@@ -4,7 +4,13 @@ from __future__ import annotations
 from pathlib import Path
 from tkinter import messagebox
 
+import pandas as pd
 import customtkinter as ctk
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 
 from . import theme as T
 from .state import ProjectState
@@ -36,9 +42,13 @@ class VolumenesView(ctk.CTkFrame):
     def _build(self):
         self.scroll = ctk.CTkScrollableFrame(self, fg_color=T.APP_BG)
         self.scroll.pack(fill="both", expand=True)
+        self._fig_mapa    = None
+        self._fig_frentes = None
         self._build_header()
         self._build_frentes_section()
+        self._build_mapa_abscisas()
         self._build_resultados_section()
+        self._build_historial_section()
 
     # ── Encabezado ──────────────────────────────────────────────────────
     def _build_header(self):
@@ -71,21 +81,27 @@ class VolumenesView(ctk.CTkFrame):
 
         self._ent_nombre = ctk.CTkEntry(
             form, placeholder_text="Nombre del frente",
-            width=190, height=34, font=T.FONT_BODY,
+            width=180, height=34, font=T.FONT_BODY,
         )
         self._ent_nombre.grid(row=0, column=0, padx=(0, 8))
 
+        self._ent_encargado = ctk.CTkEntry(
+            form, placeholder_text="Encargado del frente",
+            width=170, height=34, font=T.FONT_BODY,
+        )
+        self._ent_encargado.grid(row=0, column=1, padx=(0, 8))
+
         self._ent_abs_ini = ctk.CTkEntry(
             form, placeholder_text="Abscisa inicio (m)",
-            width=150, height=34, font=T.FONT_BODY,
+            width=140, height=34, font=T.FONT_BODY,
         )
-        self._ent_abs_ini.grid(row=0, column=1, padx=(0, 8))
+        self._ent_abs_ini.grid(row=0, column=2, padx=(0, 8))
 
         self._ent_abs_fin = ctk.CTkEntry(
             form, placeholder_text="Abscisa fin (m)",
-            width=150, height=34, font=T.FONT_BODY,
+            width=140, height=34, font=T.FONT_BODY,
         )
-        self._ent_abs_fin.grid(row=0, column=2, padx=(0, 8))
+        self._ent_abs_fin.grid(row=0, column=3, padx=(0, 8))
 
         ctk.CTkButton(
             form, text="+ Agregar", width=110, height=34,
@@ -93,7 +109,7 @@ class VolumenesView(ctk.CTkFrame):
             fg_color=T.SUCCESS, hover_color=T.SUCCESS_HOV,
             text_color="white",
             command=self._add_frente,
-        ).grid(row=0, column=3)
+        ).grid(row=0, column=4)
 
         # ── Divisor ───────────────────────────────────────────────────
         ctk.CTkFrame(card, height=1, fg_color=T.CARD_BORDER).pack(
@@ -102,6 +118,42 @@ class VolumenesView(ctk.CTkFrame):
         # ── Lista dinámica de frentes ──────────────────────────────────
         self._frentes_list_frame = ctk.CTkFrame(card, fg_color="transparent")
         self._frentes_list_frame.pack(fill="x", padx=18, pady=(0, 8))
+
+        # ── Selector de fecha de vuelo ─────────────────────────────────
+        ctk.CTkFrame(card, height=1, fg_color=T.CARD_BORDER).pack(
+            fill="x", padx=18, pady=(8, 6))
+
+        fecha_row = ctk.CTkFrame(card, fg_color="transparent")
+        fecha_row.pack(fill="x", padx=18, pady=(0, 8))
+
+        ctk.CTkLabel(
+            fecha_row, text="Fecha de vuelo:",
+            font=T.FONT_BODY, text_color=T.TEXT, anchor="w",
+        ).pack(side="left", padx=(0, 8))
+
+        self._fecha_vuelo_var = ctk.StringVar(value="Objetivo (diseño)")
+        self._fecha_combo = ctk.CTkComboBox(
+            fecha_row,
+            variable=self._fecha_vuelo_var,
+            values=["Objetivo (diseño)"],
+            width=220, font=T.FONT_BODY,
+            state="readonly",
+        )
+        self._fecha_combo.pack(side="left")
+
+        ctk.CTkButton(
+            fecha_row, text="↻", width=32, height=30,
+            fg_color="transparent", border_width=1,
+            border_color=T.CARD_BORDER, text_color=T.TEXT_MUTED,
+            hover_color=T.HOVER_BG,
+            command=self._refresh_fechas_combo,
+        ).pack(side="left", padx=(6, 0))
+
+        ctk.CTkLabel(
+            fecha_row,
+            text="Eje DXF referenciado desde K0+000",
+            font=T.FONT_TINY, text_color=T.TEXT_FAINT, anchor="w",
+        ).pack(side="left", padx=(14, 0))
 
         # ── Botón recalcular ───────────────────────────────────────────
         btn_row = ctk.CTkFrame(card, fg_color="transparent")
@@ -119,6 +171,120 @@ class VolumenesView(ctk.CTkFrame):
         self.btn_recalc.pack(side="right")
 
         self._refresh_frentes_ui()
+        self._refresh_fechas_combo()
+
+    # ── Mapa de abscisado ────────────────────────────────────────────────
+    def _build_mapa_abscisas(self):
+        self._mapa_card = Card(
+            self.scroll,
+            title="Mapa de abscisado — Frentes de obra",
+            light=True,
+        )
+        self._mapa_card.pack(fill="x", padx=20, pady=(0, 16))
+        ctk.CTkLabel(
+            self._mapa_card,
+            text="Posición de cada frente a lo largo del corredor vial.",
+            font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
+        ).pack(anchor="w", padx=18, pady=(0, 6))
+        self._mapa_holder = ctk.CTkFrame(
+            self._mapa_card, fg_color="transparent")
+        self._mapa_holder.pack(fill="both", expand=True, padx=18, pady=(0, 14))
+        self._render_mapa_frentes()
+
+    def _render_mapa_frentes(self):
+        if self._fig_mapa is not None:
+            try:
+                plt.close(self._fig_mapa)
+            except Exception:
+                pass
+            self._fig_mapa = None
+        for w in self._mapa_holder.winfo_children():
+            w.destroy()
+
+        frentes = self.state.load_frentes()
+
+        if not frentes:
+            ctk.CTkLabel(
+                self._mapa_holder,
+                text=(
+                    "Sin frentes definidos. "
+                    "Agrega frentes para ver el mapa de abscisado."
+                ),
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
+            ).pack(anchor="w", pady=14)
+            return
+
+        _PALETTE = [
+            "#3B82F6", "#10B981", "#F59E0B", "#EF4444",
+            "#8B5CF6", "#06B6D4", "#84CC16", "#F97316",
+            "#EC4899", "#14B8A6",
+        ]
+
+        plt.style.use("default")
+        bg     = T.mc(T.CARD_BG)
+        axis_c = T.mc(T.AXIS_FG)
+        grid_c = T.mc(T.GRID_COLOR)
+
+        n      = len(frentes)
+        fig_h  = max(2.4, 0.60 * n + 1.4)
+
+        fig = Figure(figsize=(9, fig_h), dpi=100, facecolor=bg)
+        self._fig_mapa = fig
+        ax  = fig.add_subplot(111)
+        ax.set_facecolor(bg)
+
+        all_ini = [float(f.get("abs_ini", 0)) for f in frentes]
+        all_fin = [float(f.get("abs_fin", 0)) for f in frentes]
+        span    = max(all_fin) - min(all_ini) or 1.0
+        margin  = span * 0.06
+
+        for i, fr in enumerate(frentes):
+            ini       = float(fr.get("abs_ini", 0))
+            fin       = float(fr.get("abs_fin", 0))
+            nombre    = str(fr.get("nombre", f"Frente {i + 1}"))
+            encargado = str(fr.get("encargado", "")).strip()
+            color     = _PALETTE[i % len(_PALETTE)]
+
+            ax.barh(i, fin - ini, left=ini, height=0.60,
+                    color=color, alpha=0.82, zorder=2,
+                    edgecolor=bg, linewidth=0.8)
+
+            # Etiqueta dentro de la barra: nombre · encargado
+            mid = (ini + fin) / 2
+            lbl = nombre if not encargado else f"{nombre}  ·  {encargado}"
+            ax.text(mid, i, lbl,
+                    ha="center", va="center",
+                    fontsize=8, color="white", fontweight="bold",
+                    zorder=3, clip_on=True)
+
+            # Abscisas de inicio y fin bajo la barra
+            ax.text(ini, i - 0.42, _km_str(ini),
+                    ha="left", va="top", fontsize=6.5, color=axis_c, zorder=4)
+            ax.text(fin, i - 0.42, _km_str(fin),
+                    ha="right", va="top", fontsize=6.5, color=axis_c, zorder=4)
+
+        # Ejes y estilo
+        tick_vals = sorted(set(all_ini + all_fin))
+        ax.set_xticks(tick_vals)
+        ax.set_xticklabels(
+            [_km_str(v) for v in tick_vals],
+            fontsize=8, color=axis_c, rotation=30, ha="right",
+        )
+        ax.set_yticks(range(n))
+        ax.set_yticklabels([])
+        ax.set_xlim(min(all_ini) - margin, max(all_fin) + margin)
+        ax.set_ylim(-0.85, n - 0.15)
+        ax.grid(axis="x", ls="--", color=grid_c, alpha=0.45, zorder=0)
+
+        for s in ax.spines.values():
+            s.set_color(grid_c)
+        ax.tick_params(colors=axis_c, left=False)
+
+        fig.tight_layout(pad=0.5)
+
+        canvas = FigureCanvasTkAgg(fig, master=self._mapa_holder)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
 
     # ── Resultados por frente ────────────────────────────────────────────
     def _build_resultados_section(self):
@@ -126,8 +292,37 @@ class VolumenesView(ctk.CTkFrame):
             self.scroll, title="Resultados por frente", light=True)
         self._res_card.pack(fill="x", padx=20, pady=(0, 32))
         self._res_body = ctk.CTkFrame(self._res_card, fg_color="transparent")
-        self._res_body.pack(fill="x", padx=18, pady=(0, 16))
+        self._res_body.pack(fill="x", padx=18, pady=(0, 10))
+
+        # Separador + sección gráfica
+        ctk.CTkFrame(self._res_card, height=1,
+                     fg_color=T.CARD_BORDER).pack(fill="x", padx=18, pady=(4, 6))
+        ctk.CTkLabel(
+            self._res_card,
+            text="Abscisado vs. Volumen por frente",
+            font=(T.FONT_FAMILY, 11, "bold"), text_color=T.TEXT, anchor="w",
+        ).pack(anchor="w", padx=18, pady=(0, 4))
+        self._chart_holder = ctk.CTkFrame(self._res_card, fg_color="transparent")
+        self._chart_holder.pack(fill="both", expand=True, padx=18, pady=(0, 14))
+
         self._refresh_resultados()
+
+    # ── Combo de fechas de vuelo ─────────────────────────────────────────
+    def _refresh_fechas_combo(self):
+        """Actualiza la lista de fechas de vuelos procesados en el combo."""
+        procesadas = sorted(self.state.vuelos_procesados(), reverse=True)
+        opciones = ["Objetivo (diseño)"] + list(procesadas)
+        self._fecha_combo.configure(values=opciones)
+        current = self._fecha_vuelo_var.get()
+        if current not in opciones:
+            self._fecha_vuelo_var.set("Objetivo (diseño)")
+
+    def _fecha_seleccionada(self) -> str | None:
+        """Devuelve la fecha seleccionada o None si se eligió 'Objetivo'."""
+        val = self._fecha_vuelo_var.get()
+        if val.startswith("Objetivo"):
+            return None
+        return val
 
     # ── Rutas de archivos ────────────────────────────────────────────────
     def _eje_path(self) -> Path | None:
@@ -142,7 +337,10 @@ class VolumenesView(ctk.CTkFrame):
         return self.state.dem_final_path()
 
     def refresh(self):
-        pass
+        if hasattr(self, "_hist_body"):
+            self._refresh_historial()
+        if hasattr(self, "_fecha_combo"):
+            self._refresh_fechas_combo()
 
     # ── Frentes: lista dinámica ──────────────────────────────────────────
     def _refresh_frentes_ui(self):
@@ -161,11 +359,12 @@ class VolumenesView(ctk.CTkFrame):
 
         # Cabecera de columnas
         _COLS = [
-            ("NOMBRE",    220, "w"),
-            ("INICIO",    120, "w"),
-            ("FIN",       120, "w"),
-            ("LONGITUD",  110, "w"),
-            ("",           48, "center"),
+            ("NOMBRE",     200, "w"),
+            ("ENCARGADO",  170, "w"),
+            ("INICIO",     110, "w"),
+            ("FIN",        110, "w"),
+            ("LONGITUD",   100, "w"),
+            ("",            48, "center"),
         ]
         hdr = ctk.CTkFrame(self._frentes_list_frame, fg_color="transparent")
         hdr.pack(fill="x", pady=(2, 4))
@@ -177,6 +376,7 @@ class VolumenesView(ctk.CTkFrame):
 
         for i, fr in enumerate(frentes):
             nombre     = str(fr.get("nombre", f"Frente {i + 1}"))
+            encargado  = str(fr.get("encargado", "")).strip()
             abs_ini    = float(fr.get("abs_ini", 0))
             abs_fin    = float(fr.get("abs_fin", 0))
             longitud   = abs_fin - abs_ini
@@ -191,26 +391,33 @@ class VolumenesView(ctk.CTkFrame):
             ctk.CTkLabel(
                 row, text=f"  {nombre}",
                 font=(T.FONT_FAMILY, 11, "bold"),
-                text_color=T.TEXT, width=220, anchor="w",
+                text_color=T.TEXT, width=200, anchor="w",
             ).grid(row=0, column=0, padx=4, pady=6)
+
+            ctk.CTkLabel(
+                row, text=encargado if encargado else "—",
+                font=T.FONT_BODY,
+                text_color=T.TEXT if encargado else T.TEXT_MUTED,
+                width=170, anchor="w",
+            ).grid(row=0, column=1, padx=4)
 
             ctk.CTkLabel(
                 row, text=_km_str(abs_ini),
                 font=T.FONT_BODY, text_color=T.TEXT_MUTED,
-                width=120, anchor="w",
-            ).grid(row=0, column=1, padx=4)
+                width=110, anchor="w",
+            ).grid(row=0, column=2, padx=4)
 
             ctk.CTkLabel(
                 row, text=_km_str(abs_fin),
                 font=T.FONT_BODY, text_color=T.TEXT_MUTED,
-                width=120, anchor="w",
-            ).grid(row=0, column=2, padx=4)
+                width=110, anchor="w",
+            ).grid(row=0, column=3, padx=4)
 
             ctk.CTkLabel(
                 row, text=f"{longitud:,.0f} m",
                 font=T.FONT_BODY, text_color=T.TEXT_MUTED,
-                width=110, anchor="w",
-            ).grid(row=0, column=3, padx=4)
+                width=100, anchor="w",
+            ).grid(row=0, column=4, padx=4)
 
             def _make_del(idx=i):
                 return lambda: self._remove_frente(idx)
@@ -222,10 +429,11 @@ class VolumenesView(ctk.CTkFrame):
                 text_color=T.DANGER,
                 font=(T.FONT_FAMILY, 11, "bold"),
                 command=_make_del(),
-            ).grid(row=0, column=4, padx=(0, 4))
+            ).grid(row=0, column=5, padx=(0, 4))
 
     def _add_frente(self):
         nombre      = self._ent_nombre.get().strip()
+        encargado   = self._ent_encargado.get().strip()
         abs_ini_str = self._ent_abs_ini.get().strip()
         abs_fin_str = self._ent_abs_fin.get().strip()
 
@@ -249,13 +457,20 @@ class VolumenesView(ctk.CTkFrame):
             return
 
         frentes = self.state.load_frentes()
-        frentes.append({"nombre": nombre, "abs_ini": abs_ini, "abs_fin": abs_fin})
+        frentes.append({
+            "nombre": nombre,
+            "encargado": encargado,
+            "abs_ini": abs_ini,
+            "abs_fin": abs_fin,
+        })
         self.state.save_frentes(frentes)
 
         self._ent_nombre.delete(0, "end")
+        self._ent_encargado.delete(0, "end")
         self._ent_abs_ini.delete(0, "end")
         self._ent_abs_fin.delete(0, "end")
         self._refresh_frentes_ui()
+        self._render_mapa_frentes()
         if self.on_updated:
             self.on_updated()
 
@@ -265,6 +480,7 @@ class VolumenesView(ctk.CTkFrame):
             frentes.pop(idx)
             self.state.save_frentes(frentes)
             self._refresh_frentes_ui()
+            self._render_mapa_frentes()
             if self.on_updated:
                 self.on_updated()
 
@@ -273,7 +489,7 @@ class VolumenesView(ctk.CTkFrame):
         for w in self._res_body.winfo_children():
             w.destroy()
 
-        resultados = self.state.load_frentes_resultado()
+        resultados, fecha_res, modo_res = self.state.load_frentes_resultado()
 
         if not resultados:
             ctk.CTkLabel(
@@ -284,7 +500,20 @@ class VolumenesView(ctk.CTkFrame):
                 ),
                 font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
             ).pack(anchor="w", pady=14)
+            self._render_grafica_frentes([])
             return
+
+        # Banner de modo/fecha del resultado
+        if modo_res:
+            banner = ctk.CTkFrame(self._res_body, fg_color=T.HOVER_BG, corner_radius=6)
+            banner.pack(fill="x", pady=(4, 8))
+            icono = "📅" if fecha_res else "📐"
+            ctk.CTkLabel(
+                banner,
+                text=f"  {icono}  {modo_res}",
+                font=(T.FONT_FAMILY, 11, "bold"),
+                text_color=T.PRIMARY, anchor="w",
+            ).pack(anchor="w", padx=12, pady=6)
 
         _COLS = [
             ("FRENTE",        200),
@@ -353,16 +582,282 @@ class VolumenesView(ctk.CTkFrame):
                     text_color=color, width=w, anchor="w",
                 ).grid(row=0, column=col_i, sticky="w", padx=4, pady=6)
 
+        self._render_grafica_frentes(resultados)
+
+    # ── Gráfica dispersión Abscisado vs Volumen ──────────────────────────
+    def _render_grafica_frentes(self, resultados: list):
+        if self._fig_frentes is not None:
+            try:
+                plt.close(self._fig_frentes)
+            except Exception:
+                pass
+            self._fig_frentes = None
+        for w in self._chart_holder.winfo_children():
+            w.destroy()
+
+        datos = [
+            r for r in resultados
+            if r.get("nombre") != "TOTAL" and r.get("abs_ini") is not None
+        ]
+
+        if not datos:
+            ctk.CTkLabel(
+                self._chart_holder,
+                text="Sin datos de volumen para graficar.",
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
+            ).pack(anchor="w", pady=14)
+            return
+
+        plt.style.use("default")
+        bg     = T.mc(T.CARD_BG)
+        axis_c = T.mc(T.AXIS_FG)
+        grid_c = T.mc(T.GRID_COLOR)
+
+        # Abscisa media de cada frente como punto X
+        xs       = [(float(r["abs_ini"]) + float(r["abs_fin"])) / 2
+                    for r in datos]
+        cortes   = [float(r.get("corte_m3",   0)) for r in datos]
+        rellenos = [float(r.get("relleno_m3", 0)) for r in datos]
+
+        fig = Figure(figsize=(8, 3.4), dpi=100, facecolor=bg)
+        self._fig_frentes = fig
+        ax  = fig.add_subplot(111)
+        ax.set_facecolor(bg)
+
+        # Línea + puntos roja: corte
+        ax.plot(xs, cortes, "-o",
+                color=T.CORTE_COLOR, lw=2, ms=7,
+                mfc=T.CORTE_COLOR, mec=bg,
+                label="Corte (m³)", zorder=3)
+
+        # Línea + puntos verde: relleno
+        ax.plot(xs, rellenos, "-o",
+                color=T.RELLENO_COLOR, lw=2, ms=7,
+                mfc=T.RELLENO_COLOR, mec=bg,
+                label="Relleno (m³)", zorder=3)
+
+        # Anotaciones de valor sobre cada punto
+        y_max = max(max(cortes, default=0), max(rellenos, default=0)) or 1
+        offset = y_max * 0.04
+        for x, c, r in zip(xs, cortes, rellenos):
+            ax.annotate(f"{c:,.0f}",
+                        xy=(x, c), xytext=(0, 6),
+                        textcoords="offset points",
+                        ha="center", fontsize=7,
+                        color=T.CORTE_COLOR)
+            ax.annotate(f"{r:,.0f}",
+                        xy=(x, r), xytext=(0, 6),
+                        textcoords="offset points",
+                        ha="center", fontsize=7,
+                        color=T.RELLENO_COLOR)
+
+        # Líneas verticales punteadas por frente
+        for x in xs:
+            ax.axvline(x, color=grid_c, lw=0.7, ls=":", zorder=1)
+
+        # Eje X en formato KM
+        ax.set_xticks(xs)
+        ax.set_xticklabels(
+            [_km_str(v) for v in xs],
+            fontsize=8, color=axis_c, rotation=25, ha="right",
+        )
+        ax.yaxis.set_major_formatter(
+            plt.FuncFormatter(lambda v, _: f"{v:,.0f}"))
+        ax.set_ylabel("Volumen (m³)", fontsize=8, color=axis_c)
+        ax.tick_params(colors=axis_c, labelsize=8)
+        ax.legend(fontsize=8, frameon=False, loc="upper right",
+                  labelcolor=axis_c, ncol=2)
+        ax.grid(axis="y", ls="--", color=grid_c, alpha=0.45, zorder=0)
+
+        for s in ax.spines.values():
+            s.set_color(grid_c)
+
+        fig.tight_layout(pad=0.5)
+
+        canvas = FigureCanvasTkAgg(fig, master=self._chart_holder)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    # ── Historial diario ──────────────────────────────────────────────────
+    def _build_historial_section(self):
+        card = Card(
+            self.scroll,
+            title="Comparativo diario de volúmenes",
+            light=True,
+        )
+        card.pack(fill="x", padx=20, pady=(0, 32))
+        ctk.CTkLabel(
+            card,
+            text="Día procesado (★) comparado con los 5 días anteriores registrados.",
+            font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
+        ).pack(anchor="w", padx=18, pady=(0, 10))
+        self._hist_body = ctk.CTkFrame(card, fg_color="transparent")
+        self._hist_body.pack(fill="x", padx=18, pady=(0, 16))
+        self._refresh_historial()
+
+    def _refresh_historial(self):
+        for w in self._hist_body.winfo_children():
+            w.destroy()
+
+        try:
+            df = self.state.load_registro()
+        except Exception:
+            df = None
+
+        if df is None or df.empty:
+            ctk.CTkLabel(
+                self._hist_body,
+                text="Sin registros de vuelos disponibles.",
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
+            ).pack(anchor="w", pady=10)
+            return
+
+        # Solo fechas que existen como vuelos en la sección "Vuelos y modelos DEM"
+        fechas_vuelos = set(self.state.vuelos_disponibles())
+        if fechas_vuelos:
+            df = df[df["fecha"].dt.strftime("%Y-%m-%d").isin(fechas_vuelos)]
+        else:
+            df = pd.DataFrame()
+
+        # Solo filas con cálculo real de volúmenes (pipeline ejecutado)
+        vol_col = "vol_corte_dia"
+        if not df.empty and vol_col in df.columns:
+            df = df[df[vol_col].notna()]
+        elif not df.empty:
+            df = pd.DataFrame()
+
+        if df.empty:
+            ctk.CTkLabel(
+                self._hist_body,
+                text="Sin cálculos de volumen aún. Procesa un vuelo con el pipeline para ver datos aquí.",
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
+            ).pack(anchor="w", pady=10)
+            return
+
+        # Últimos 6 registros con volumen correspondientes a vuelos cargados, más reciente primero
+        df = (
+            df.sort_values("fecha")
+            .tail(6)
+            .iloc[::-1]
+            .reset_index(drop=True)
+        )
+
+        _COLS = [
+            ("FECHA",             130),
+            ("VUELO",              64),
+            ("CORTE DÍA (m³)",   140),
+            ("RELLENO DÍA (m³)", 150),
+            ("BALANCE (m³)",     140),
+            ("Δ CORTE",          110),
+            ("Δ RELLENO",        110),
+        ]
+
+        # Cabecera
+        hdr = ctk.CTkFrame(self._hist_body, fg_color="transparent")
+        hdr.pack(fill="x", pady=(0, 2))
+        for col_i, (txt, col_w) in enumerate(_COLS):
+            ctk.CTkLabel(
+                hdr, text=txt, font=T.FONT_TINY,
+                text_color=T.TEXT_MUTED, width=col_w, anchor="w",
+            ).grid(row=0, column=col_i, sticky="w", padx=4)
+
+        ctk.CTkFrame(self._hist_body, height=1,
+                     fg_color=T.CARD_BORDER).pack(fill="x", pady=(2, 4))
+
+        for i in range(len(df)):
+            r         = df.iloc[i]
+            is_latest = (i == 0)
+
+            corte   = float(r.get("vol_corte_dia",   0) or 0)
+            relleno = float(r.get("vol_relleno_dia", 0) or 0)
+            balance = float(r.get("balance_dia",     0) or 0)
+            vuelo   = int(r.get("vuelo_num", 0) or 0)
+
+            # Δ respecto al día anterior en la lista (= siguiente en el tiempo)
+            delta_c_txt, delta_c_col = "—", T.TEXT_MUTED
+            delta_r_txt, delta_r_col = "—", T.TEXT_MUTED
+            if i + 1 < len(df):
+                prev = df.iloc[i + 1]
+                pc   = float(prev.get("vol_corte_dia",   0) or 0)
+                pr   = float(prev.get("vol_relleno_dia", 0) or 0)
+                if pc != 0:
+                    pct = (corte - pc) / abs(pc) * 100
+                    arrow = "↑" if pct >= 0 else "↓"
+                    delta_c_txt = f"{arrow} {abs(pct):.1f}%"
+                    delta_c_col = T.SUCCESS if pct >= 0 else T.DANGER
+                if pr != 0:
+                    pct = (relleno - pr) / abs(pr) * 100
+                    arrow = "↑" if pct >= 0 else "↓"
+                    delta_r_txt = f"{arrow} {abs(pct):.1f}%"
+                    delta_r_col = T.SUCCESS if pct >= 0 else T.DANGER
+
+            # Estilo de fila
+            if is_latest:
+                row_bg   = ("#EFF6FF", "#1E3A5F")   # azul suave claro/oscuro
+                name_fnt = (T.FONT_FAMILY, 11, "bold")
+            else:
+                row_bg   = T.TABLE_HOVER if i % 2 == 0 else "transparent"
+                name_fnt = T.FONT_BODY
+
+            fecha_str = r["fecha"].strftime("%d %b %Y")
+            prefix    = "★  " if is_latest else "    "
+            bal_color = T.DANGER if balance < 0 else T.SUCCESS
+
+            row_frame = ctk.CTkFrame(
+                self._hist_body, fg_color=row_bg, corner_radius=6)
+            row_frame.pack(fill="x", pady=2)
+
+            cells = [
+                (f"{prefix}{fecha_str}", T.TEXT,           name_fnt),
+                (f"#{vuelo}",           T.TEXT_MUTED,     T.FONT_BODY),
+                (f"{corte:,.0f}",       T.CORTE_COLOR,    T.FONT_BODY),
+                (f"{relleno:,.0f}",     T.RELLENO_COLOR,  T.FONT_BODY),
+                (f"{balance:+,.0f}",    bal_color,        name_fnt),
+                (delta_c_txt,           delta_c_col,      T.FONT_SMALL),
+                (delta_r_txt,           delta_r_col,      T.FONT_SMALL),
+            ]
+            for col_i, ((cell_txt, cell_color, cell_font), col_w) in enumerate(
+                zip(cells, [w for _, w in _COLS])
+            ):
+                ctk.CTkLabel(
+                    row_frame, text=cell_txt,
+                    font=cell_font, text_color=cell_color,
+                    width=col_w, anchor="w",
+                ).grid(row=0, column=col_i, sticky="w", padx=4, pady=7)
+
     # ── Acciones ─────────────────────────────────────────────────────────
     def _recalcular_frentes(self):
-        if not all([self.state.dem_baseline_path(),
-                    self._eje_path(),
-                    self._dem_final_path()]):
-            messagebox.showwarning(
-                "Insumos faltantes",
-                "Carga el DEM Inicial, Eje de la Vía y DEM Final antes de calcular.",
-            )
-            return
+        fecha = self._fecha_seleccionada()
+
+        # Validar insumos según el modo
+        if fecha is None:
+            # Modo objetivo: necesita dem_final
+            if not all([self.state.dem_baseline_path(),
+                        self._eje_path(),
+                        self._dem_final_path()]):
+                messagebox.showwarning(
+                    "Insumos faltantes",
+                    "Para calcular el volumen objetivo carga:\n"
+                    "  · DEM Inicial\n  · Eje de la Vía\n  · DEM Final",
+                )
+                return
+        else:
+            # Modo avance real: necesita dz_acum del vuelo
+            if not all([self.state.dem_baseline_path(), self._eje_path()]):
+                messagebox.showwarning(
+                    "Insumos faltantes",
+                    "Carga el DEM Inicial y el Eje de la Vía antes de calcular.",
+                )
+                return
+            from pathlib import Path
+            dz_path = self.state.vuelos_dir / fecha / "dz_acum.tif"
+            if not dz_path.exists():
+                messagebox.showerror(
+                    "Vuelo sin procesar",
+                    f"No se encontró dz_acum.tif para la fecha {fecha}.\n\n"
+                    "Ejecuta el pipeline para ese vuelo antes de calcular.",
+                )
+                return
 
         frentes = self.state.load_frentes()
         if not frentes:
@@ -372,6 +867,11 @@ class VolumenesView(ctk.CTkFrame):
             )
             return
 
+        titulo = (
+            f"Calculando Volúmenes por Frente — {fecha}"
+            if fecha else "Calculando Volúmenes por Frente — Objetivo (diseño)"
+        )
+
         def _on_done(ok):
             self.after(0, self._refresh_resultados, ok)
             if ok and self.on_updated:
@@ -380,7 +880,7 @@ class VolumenesView(ctk.CTkFrame):
         from .runner import ProcessDialog
         ProcessDialog(
             self.winfo_toplevel(),
-            titulo="Calculando Volúmenes por Frente",
-            popen_factory=self.state.run_volumen_frentes,
+            titulo=titulo,
+            popen_factory=lambda: self.state.run_volumen_frentes(fecha),
             on_done=_on_done,
         )
