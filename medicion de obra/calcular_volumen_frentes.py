@@ -252,6 +252,53 @@ def main() -> None:
     )
     print(f"\nResultados guardados en {out_path.name}", flush=True)
 
+    # ── Perfil por estación (cada 10 m) ─────────────────────────────────
+    print("\nGenerando perfil por estación (cada 10 m) …", flush=True)
+    STEP = 10.0
+    frentes_ranges = [
+        (float(fr["abs_ini"]), float(fr["abs_fin"]))
+        for fr in frentes
+        if fr.get("abs_ini") is not None
+    ]
+    abs_global_min = min(r[0] for r in frentes_ranges)
+    abs_global_max = max(r[1] for r in frentes_ranges)
+
+    stations = np.arange(abs_global_min, abs_global_max + STEP * 0.5, STEP)
+    perfil: list[dict] = []
+
+    for st in stations:
+        if not any(ini <= st <= fin for ini, fin in frentes_ranges):
+            continue
+        lo = st - STEP / 2.0
+        hi = st + STEP / 2.0
+        band_mask = valid & (abs_raster >= lo) & (abs_raster < hi)
+        dz_band = dz[band_mask]
+        if dz_band.size == 0:
+            continue
+        c_m3 = float(np.sum(np.abs(dz_band[dz_band < 0])) * pixel_m2)
+        r_m3 = float(np.sum(dz_band[dz_band > 0]) * pixel_m2)
+        perfil.append({
+            "abs":        round(float(st), 1),
+            "corte_m3":   round(c_m3, 2),
+            "relleno_m3": round(r_m3, 2),
+        })
+
+    perfil_path = (
+        BASE / "baseline" / "perfil_avance.json"
+        if args.fecha
+        else BASE / "baseline" / "perfil_objetivo.json"
+    )
+    perfil_data = {
+        "fecha": args.fecha,
+        "modo":  modo_label,
+        "perfil": perfil,
+    }
+    perfil_path.write_text(
+        json.dumps(perfil_data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    print(f"Perfil por estación guardado en {perfil_path.name}  ({len(perfil)} puntos)", flush=True)
+
 
 if __name__ == "__main__":
     main()

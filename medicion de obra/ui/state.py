@@ -36,6 +36,8 @@ class ProjectState:
         self.registros_equipos_path: Path = base / "registros_equipos.csv"
         self.calcular_frentes_script: Path = base / "calcular_volumen_frentes.py"
         self.frentes_resultado_path_file: Path = base / "baseline" / "frentes_resultado.json"
+        self.perfil_objetivo_path_file: Path = base / "baseline" / "perfil_objetivo.json"
+        self.perfil_avance_path_file: Path = base / "baseline" / "perfil_avance.json"
 
     # ── Configuración ────────────────────────────────────────────────────
     def load_config(self) -> Optional[dict]:
@@ -178,6 +180,20 @@ class ProjectState:
             return raw["frentes"], raw.get("fecha"), raw.get("modo", "")
         # Formato legado: lista plana
         return raw, None, ""
+
+    def load_perfil_objetivo(self) -> list[dict]:
+        p = self.perfil_objetivo_path_file
+        if not p.exists():
+            return []
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        return raw.get("perfil", [])
+
+    def load_perfil_avance(self) -> tuple[list[dict], str | None]:
+        p = self.perfil_avance_path_file
+        if not p.exists():
+            return [], None
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        return raw.get("perfil", []), raw.get("fecha")
 
     def run_volumen_frentes(self, fecha: str | None = None) -> subprocess.Popen:
         cmd = [self.python_exe(), str(self.calcular_frentes_script)]

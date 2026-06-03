@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from tkinter import messagebox
 
+import numpy as np
 import pandas as pd
 import customtkinter as ctk
 import matplotlib
@@ -584,7 +585,7 @@ class VolumenesView(ctk.CTkFrame):
 
         self._render_grafica_frentes(resultados)
 
-    # ── Gráfica dispersión Abscisado vs Volumen ──────────────────────────
+    # ── Gráfica estilo Excel: corte/lleno por abscisa ────────────────────
     def _render_grafica_frentes(self, resultados: list):
         if self._fig_frentes is not None:
             try:
@@ -595,84 +596,159 @@ class VolumenesView(ctk.CTkFrame):
         for w in self._chart_holder.winfo_children():
             w.destroy()
 
-        datos = [
-            r for r in resultados
-            if r.get("nombre") != "TOTAL" and r.get("abs_ini") is not None
-        ]
+        perfil_obj             = self.state.load_perfil_objetivo()
+        perfil_avance, f_fecha = self.state.load_perfil_avance()
 
-        if not datos:
+        if not perfil_obj and not perfil_avance:
             ctk.CTkLabel(
                 self._chart_holder,
-                text="Sin datos de volumen para graficar.",
+                text=(
+                    "Sin perfil disponible. Recalcula usando 'Objetivo (diseño)' "
+                    "y después con una fecha de vuelo."
+                ),
                 font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
             ).pack(anchor="w", pady=14)
             return
+
+        frentes = self.state.load_frentes()
+        frentes_ranges = [
+            (float(fr["abs_ini"]), float(fr["abs_fin"]))
+            for fr in frentes
+            if fr.get("abs_ini") is not None
+        ]
+
+        def _in_frentes(v: float) -> bool:
+            return any(ini <= v <= fin for ini, fin in frentes_ranges)
+
+        # Unir abscisas de ambos perfiles, filtradas a los frentes definidos
+        all_abs = sorted({
+            p["abs"] for src in (perfil_obj, perfil_avance) for p in src
+            if _in_frentes(p["abs"])
+        })
+
+        if not all_abs:
+            ctk.CTkLabel(
+                self._chart_holder,
+                text="No hay datos en las abscisas de los frentes definidos.",
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
+            ).pack(anchor="w", pady=14)
+            return
+
+        obj_map    = {p["abs"]: p for p in perfil_obj}
+        avance_map = {p["abs"]: p for p in perfil_avance}
+
+        xs = all_abs
+        # corte → negativo (bajo el cero), relleno → positivo (sobre el cero)
+        obj_corte   = [-obj_map[x]["corte_m3"]    if x in obj_map    else float("nan") for x in xs]
+        obj_relleno = [ obj_map[x]["relleno_m3"]  if x in obj_map    else float("nan") for x in xs]
+        dia_corte   = [-avance_map[x]["corte_m3"] if x in avance_map else float("nan") for x in xs]
+        dia_relleno = [ avance_map[x]["relleno_m3"] if x in avance_map else float("nan") for x in xs]
 
         plt.style.use("default")
         bg     = T.mc(T.CARD_BG)
         axis_c = T.mc(T.AXIS_FG)
         grid_c = T.mc(T.GRID_COLOR)
 
-        # Abscisa media de cada frente como punto X
-        xs       = [(float(r["abs_ini"]) + float(r["abs_fin"])) / 2
-                    for r in datos]
-        cortes   = [float(r.get("corte_m3",   0)) for r in datos]
-        rellenos = [float(r.get("relleno_m3", 0)) for r in datos]
-
-        fig = Figure(figsize=(8, 3.4), dpi=100, facecolor=bg)
+        fig = Figure(figsize=(9, 4.0), dpi=100, facecolor=bg)
         self._fig_frentes = fig
-        ax  = fig.add_subplot(111)
+        ax = fig.add_subplot(111)
         ax.set_facecolor(bg)
 
-        # Línea + puntos roja: corte
-        ax.plot(xs, cortes, "-o",
-                color=T.CORTE_COLOR, lw=2, ms=7,
-                mfc=T.CORTE_COLOR, mec=bg,
-                label="Corte (m³)", zorder=3)
+        xs_arr       = np.array(xs,          dtype="float64")
+        obj_c_arr    = np.array(obj_corte,   dtype="float64")
+        obj_r_arr    = np.array(obj_relleno, dtype="float64")
+        dia_c_arr    = np.array(dia_corte,   dtype="float64")
+        dia_r_arr    = np.array(dia_relleno, dtype="float64")
 
-        # Línea + puntos verde: relleno
-        ax.plot(xs, rellenos, "-o",
-                color=T.RELLENO_COLOR, lw=2, ms=7,
-                mfc=T.RELLENO_COLOR, mec=bg,
-                label="Relleno (m³)", zorder=3)
+        zeros = np.zeros_like(xs_arr)
 
-        # Anotaciones de valor sobre cada punto
-        y_max = max(max(cortes, default=0), max(rellenos, default=0)) or 1
-        offset = y_max * 0.04
-        for x, c, r in zip(xs, cortes, rellenos):
-            ax.annotate(f"{c:,.0f}",
-                        xy=(x, c), xytext=(0, 6),
-                        textcoords="offset points",
-                        ha="center", fontsize=7,
-                        color=T.CORTE_COLOR)
-            ax.annotate(f"{r:,.0f}",
-                        xy=(x, r), xytext=(0, 6),
-                        textcoords="offset points",
-                        ha="center", fontsize=7,
-                        color=T.RELLENO_COLOR)
+        # ── Áreas rellenas día ──────────────────────────────────────────
+        if avance_map:
+            ax.fill_between(xs_arr, dia_c_arr, zeros,
+                            where=np.isfinite(dia_c_arr),
+                            color=T.CORTE_COLOR, alpha=0.70,
+                            step="mid", zorder=2, label="Corte día")
+            ax.fill_between(xs_arr, dia_r_arr, zeros,
+                            where=np.isfinite(dia_r_arr),
+                            color=T.RELLENO_COLOR, alpha=0.70,
+                            step="mid", zorder=2, label="Lleno día")
 
-        # Líneas verticales punteadas por frente
-        for x in xs:
-            ax.axvline(x, color=grid_c, lw=0.7, ls=":", zorder=1)
+        # ── Líneas objetivo ─────────────────────────────────────────────
+        if obj_map:
+            ax.step(xs_arr, obj_c_arr, where="mid",
+                    color=T.CORTE_COLOR, lw=1.8, ls="--", alpha=0.9,
+                    zorder=3, label="Objetivo corte")
+            ax.step(xs_arr, obj_r_arr, where="mid",
+                    color=T.RELLENO_COLOR, lw=1.8, ls="--", alpha=0.9,
+                    zorder=3, label="Objetivo lleno")
 
-        # Eje X en formato KM
-        ax.set_xticks(xs)
+        # ── Línea de cero ───────────────────────────────────────────────
+        ax.axhline(0, color=axis_c, lw=0.8, zorder=4)
+
+        # ── Líneas divisorias entre frentes ────────────────────────────
+        for ini, fin in frentes_ranges:
+            ax.axvline(ini, color=grid_c, lw=0.9, ls=":", zorder=1)
+        if frentes_ranges:
+            ax.axvline(frentes_ranges[-1][1], color=grid_c, lw=0.9, ls=":", zorder=1)
+
+        # ── Eje X con etiquetas inteligentes ───────────────────────────
+        boundary_abs = sorted({v for r in frentes_ranges for v in r})
+        span = (xs[-1] - xs[0]) if len(xs) > 1 else 1.0
+        step_lbl = 50 if span < 600 else (100 if span < 1500 else 200)
+        mid_ticks = [
+            x for x in xs
+            if round(x % step_lbl) < 10.01
+            and x not in boundary_abs
+        ]
+        tick_vals = sorted(set(boundary_abs + mid_ticks))
+        ax.set_xticks(tick_vals)
         ax.set_xticklabels(
-            [_km_str(v) for v in xs],
-            fontsize=8, color=axis_c, rotation=25, ha="right",
+            [_km_str(v) for v in tick_vals],
+            fontsize=7.5, color=axis_c, rotation=30, ha="right",
         )
+        ax.set_xlim(xs[0] - span * 0.01, xs[-1] + span * 0.01)
+
+        # ── Eje Y ───────────────────────────────────────────────────────
         ax.yaxis.set_major_formatter(
-            plt.FuncFormatter(lambda v, _: f"{v:,.0f}"))
+            plt.FuncFormatter(lambda v, _: f"{abs(v):,.0f}"))
         ax.set_ylabel("Volumen (m³)", fontsize=8, color=axis_c)
         ax.tick_params(colors=axis_c, labelsize=8)
+
+        # Anotaciones de totales por frente (de resultados agregados)
+        for r in resultados:
+            if r.get("nombre") == "TOTAL" or r.get("abs_ini") is None:
+                continue
+            ini_fr = float(r["abs_ini"])
+            fin_fr = float(r["abs_fin"])
+            mid    = (ini_fr + fin_fr) / 2.0
+            c_tot  = float(r.get("corte_m3", 0))
+            r_tot  = float(r.get("relleno_m3", 0))
+            y_min, y_max = ax.get_ylim()
+            if c_tot:
+                ax.annotate(
+                    f"{c_tot:,.0f}",
+                    xy=(mid, y_min * 0.5), xytext=(0, 0),
+                    textcoords="offset points",
+                    ha="center", va="center", fontsize=7.5,
+                    color=T.CORTE_COLOR, fontweight="bold", zorder=5,
+                )
+            if r_tot:
+                ax.annotate(
+                    f"{r_tot:,.0f}",
+                    xy=(mid, y_max * 0.5), xytext=(0, 0),
+                    textcoords="offset points",
+                    ha="center", va="center", fontsize=7.5,
+                    color=T.RELLENO_COLOR, fontweight="bold", zorder=5,
+                )
+
         ax.legend(fontsize=8, frameon=False, loc="upper right",
-                  labelcolor=axis_c, ncol=2)
-        ax.grid(axis="y", ls="--", color=grid_c, alpha=0.45, zorder=0)
+                  labelcolor=axis_c, ncol=4)
+        ax.grid(axis="y", ls="--", color=grid_c, alpha=0.40, zorder=0)
 
         for s in ax.spines.values():
             s.set_color(grid_c)
 
-        fig.tight_layout(pad=0.5)
+        fig.tight_layout(pad=0.6)
 
         canvas = FigureCanvasTkAgg(fig, master=self._chart_holder)
         canvas.draw()
