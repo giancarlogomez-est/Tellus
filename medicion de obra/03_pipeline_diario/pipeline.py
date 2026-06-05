@@ -106,6 +106,38 @@ def ruta(cfg, key):
     return BASE / cfg[key]
 
 
+def calcular_volumen_objetivo(cfg):
+    """Calcula vol_corte/relleno_objetivo desde dem_final − dem_baseline y persiste en JSON."""
+    base          = cfg["_base"]
+    baseline_path = base / "baseline" / "dem_baseline.tif"
+    final_path    = base / "baseline" / "dem_final.tif"
+
+    if not baseline_path.exists() or not final_path.exists():
+        return
+
+    print("  Calculando volumen objetivo (dem_final − dem_baseline)…")
+    arr_base, tf_ref, crs_ref, _ = cargar_dem(str(baseline_path))
+    pixel_area = abs(tf_ref.a * tf_ref.e)
+    arr_final  = alinear_dem(str(final_path), tf_ref, crs_ref, arr_base.shape)
+
+    dz    = arr_final - arr_base
+    valid = dz[np.isfinite(dz)]
+
+    vol_corte   = round(float(abs(valid[valid < 0].sum()) * pixel_area), 2)
+    vol_relleno = round(float(valid[valid >= 0].sum()    * pixel_area), 2)
+
+    cfg["vol_corte_objetivo"]   = vol_corte
+    cfg["vol_relleno_objetivo"] = vol_relleno
+
+    config_path = base / "proyecto_config.json"
+    raw = json.loads(config_path.read_text(encoding="utf-8"))
+    raw["vol_corte_objetivo"]   = vol_corte
+    raw["vol_relleno_objetivo"] = vol_relleno
+    config_path.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    print(f"  Volumen objetivo → Corte: {vol_corte:,.2f} m³  |  Relleno: {vol_relleno:,.2f} m³")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # REGISTRO CSV
 # ══════════════════════════════════════════════════════════════════════════════
@@ -285,42 +317,139 @@ def guardar_dz_raster(dz_arr, meta, path):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HEATMAP
+# GRÁFICO DE BARRAS POR SECCIÓN (reemplaza heatmap raster)
 # ══════════════════════════════════════════════════════════════════════════════
-def generar_heatmap(dz_arr, tf, secciones, eje, titulo, ruta_png,
-                    dz_min=-3.0, dz_max=3.0):
-    bounds = rasterio.transform.array_bounds(
-        dz_arr.shape[0], dz_arr.shape[1], tf)
-    extent = [bounds[0], bounds[2], bounds[1], bounds[3]]
+def _km_str(m: float) -> str:
+    m_int = int(m)
+    return f"K{m_int // 1000}+{m_int % 1000:03d}"
 
-    fig, ax = plt.subplots(figsize=(13, 4.5))
-    # RdYlGn: rojo (dz<0, corte) → amarillo (0) → verde (dz>0, relleno)
-    cmap = plt.get_cmap("RdYlGn")
-    norm = mcolors.TwoSlopeNorm(vmin=dz_min, vcenter=0, vmax=dz_max)
-    ax.imshow(dz_arr, extent=extent, cmap=cmap, norm=norm,
-              origin="upper", aspect="auto")
 
-    # Eje de la vía
-    ex, ey = eje.xy
-    ax.plot(ex, ey, "k-", lw=1.2, label="Eje vía")
+def generar_grafico_volumenes(df_vols, col_corte, col_relleno, titulo, ruta_png):
+    """Gráfico de barras por sección: eje X = abscisado, barras rojo/verde."""
+    progs = df_vols["progresiva"].tolist()
+    n = len(progs)
+    if n == 0:
+        return
 
-    # Polígonos de secciones
-    for s in secciones:
-        xs, ys = s["polygon"].exterior.xy
-        ax.plot(xs, ys, "k-", lw=0.4, alpha=0.5)
+    vcs = df_vols[col_corte].fillna(0).values.astype(float)
+    vrs = df_vols[col_relleno].fillna(0).values.astype(float)
+    max_val = max(vrs.max() if n else 0, vcs.max() if n else 0, 0.001)
 
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cb = plt.colorbar(sm, ax=ax, fraction=0.02, pad=0.02)
-    cb.set_label("ΔZ (m)  ·  rojo = corte · verde = relleno", fontsize=8)
+    fig, ax = plt.subplots(figsize=(14, 5))
+    x = np.arange(n)
 
-    ax.set_title(titulo, fontsize=10)
-    ax.set_xlabel("Este (m)"); ax.set_ylabel("Norte (m)")
-    ax.legend(fontsize=8, loc="upper right")
+    ax.bar(x, vrs,  color="#10B981", alpha=0.88, width=0.85, label="Relleno (lleno)")
+    ax.bar(x, -vcs, color="#EF4444", alpha=0.88, width=0.85, label="Corte")
+    ax.axhline(0, color="#374151", lw=0.9)
+
+    step = max(1, n // 22)
+    ax.set_xticks(list(range(0, n, step)))
+    ax.set_xticklabels([progs[i] for i in range(0, n, step)],
+                       rotation=45, ha="right", fontsize=7)
+    ax.set_ylabel("Volumen (m³)", fontsize=9)
+    ax.set_xlabel("Abscisado", fontsize=9)
+    ax.set_title(titulo, fontsize=10, fontweight="bold")
     ax.tick_params(labelsize=7)
+    ax.yaxis.set_major_formatter(
+        mticker.FuncFormatter(lambda v, _: f"{abs(v):,.0f}"))
+
+    cmap_cv = mcolors.LinearSegmentedColormap.from_list(
+        "cv", ["#EF4444", "#F5F5F5", "#10B981"])
+    norm_cv = mcolors.Normalize(vmin=-max_val, vmax=max_val)
+    sm = plt.cm.ScalarMappable(cmap=cmap_cv, norm=norm_cv)
+    sm.set_array([])
+    cb = plt.colorbar(sm, ax=ax, fraction=0.015, pad=0.02)
+    cb.set_label("← Corte  |  Relleno →  (m³)", fontsize=8)
+
+    ax.legend(fontsize=8, loc="upper right")
+    ax.grid(axis="y", ls="--", alpha=0.4, color="#E5E7EB")
+    ax.set_facecolor("#FAFAFA")
+    fig.patch.set_facecolor("white")
     fig.tight_layout()
     plt.savefig(ruta_png, dpi=130, bbox_inches="tight")
     plt.close(fig)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FLOTAS Y FRENTES — HOJA EXCEL
+# ══════════════════════════════════════════════════════════════════════════════
+def _cargar_flotas_cfg(base):
+    p = base / "equipos.json"
+    if not p.exists():
+        return {"equipos": [], "flotas": []}
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def _hoja_flotas_frentes(wb, base, cfg):
+    d = _cargar_flotas_cfg(base)
+    flotas_list  = d.get("flotas", [])
+    equipos_map  = {e["id"]: e for e in d.get("equipos", [])}
+    frentes      = cfg.get("frentes", [])
+    if not flotas_list and not frentes:
+        return
+
+    ws = wb.create_sheet("Flotas y Frentes")
+    ws.sheet_view.showGridLines = False
+    for col, w in zip(["A","B","C","D","E"], [24, 20, 20, 16, 18]):
+        ws.column_dimensions[col].width = w
+
+    title_row(ws, 1, 5, "Flotas y Frentes de Obra Asignados")
+    r = 3
+
+    for fr in frentes:
+        fr_nombre = fr.get("nombre", "Frente")
+        ini_m = float(fr.get("abs_ini", 0))
+        fin_m = float(fr.get("abs_fin", 0))
+
+        ws.merge_cells(f"A{r}:E{r}")
+        c = ws.cell(row=r, column=1,
+                    value=f"▶  {fr_nombre}   {_km_str(ini_m)} → {_km_str(fin_m)}")
+        c.fill = fl("374151"); c.font = fn(True, "FFFFFF", 9)
+        c.alignment = al(h="left"); c.border = BRD
+        ws.row_dimensions[r].height = 20
+        r += 1
+
+        for ci, hdr_txt in enumerate(
+                ["Flota", "Tramo", "Equipo", "Tipo", "Capacidad"], 1):
+            hdr_c = ws.cell(row=r, column=ci, value=hdr_txt)
+            hdr_c.fill = fl("4B5563"); hdr_c.font = fn(True, "FFFFFF", 8)
+            hdr_c.alignment = al(); hdr_c.border = BRD
+        ws.row_dimensions[r].height = 18
+        r += 1
+
+        fr_flotas = [flt for flt in flotas_list
+                     if flt.get("frente_nombre") == fr_nombre
+                     or (flt.get("frente_abs_ini") == ini_m
+                         and flt.get("frente_abs_fin") == fin_m)]
+
+        if not fr_flotas:
+            ws.merge_cells(f"A{r}:E{r}")
+            ws.cell(row=r, column=1,
+                    value="(sin flotas asignadas)").font = fn(False, "999999", 8)
+            r += 1
+        else:
+            for flt in fr_flotas:
+                eq_ids = flt.get("equipo_ids", [])
+                rows_eq = [equipos_map[eid] for eid in eq_ids if eid in equipos_map]
+                if not rows_eq:
+                    rows_eq = [{}]
+                bg_hex = "F9FAFB"
+                for eq in rows_eq:
+                    vals = [
+                        flt.get("nombre", ""),
+                        flt.get("tramo", ""),
+                        eq.get("nombre", "—"),
+                        eq.get("tipo", "—"),
+                        (f"{eq.get('capacidad_nominal',0):.0f} "
+                         f"{eq.get('unidad_produccion','m³')}"
+                         if eq else "—"),
+                    ]
+                    for ci, v in enumerate(vals, 1):
+                        xc = ws.cell(row=r, column=ci, value=v)
+                        xc.font = fn(s=8); xc.border = BRD
+                        xc.alignment = al(h="left"); xc.fill = fl(bg_hex)
+                    r += 1
+        r += 1
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -421,6 +550,7 @@ def reporte_diario(cfg, fecha, vuelo_num, df_sec_dia, df_sec_acum,
         ws2.cell(row=ft, column=c).number_format = F2
 
     ws2.freeze_panes = "A3"
+    _hoja_flotas_frentes(wb, cfg["_base"], cfg)
     wb.save(ruta_xlsx)
 
 
@@ -471,8 +601,8 @@ def reporte_semanal(cfg, semana_df, semana_label, ruta_xlsx):
     fechas = [pd.Timestamp(f).strftime("%d/%m") for f in semana_df["fecha"]]
     xi = range(len(fechas))
 
-    ax1.bar(xi,  semana_df["vol_corte_dia"].values,   label="Corte",   color="#3B4E6E", alpha=0.85)
-    ax1.bar(xi, -semana_df["vol_relleno_dia"].values,  label="Relleno", color="#6E3B3B", alpha=0.85)
+    ax1.bar(xi, -semana_df["vol_corte_dia"].values,   label="Corte",   color="#EF4444", alpha=0.88)
+    ax1.bar(xi,  semana_df["vol_relleno_dia"].values, label="Relleno (lleno)", color="#10B981", alpha=0.88)
     ax1.axhline(0, color="black", lw=0.8)
     ax1.set_xticks(xi); ax1.set_xticklabels(fechas, fontsize=8)
     ax1.set_title("Producción diaria de la semana", fontsize=10)
@@ -492,6 +622,7 @@ def reporte_semanal(cfg, semana_df, semana_label, ruta_xlsx):
     img = XLImage(buf); img.width = 720; img.height = 430
     ws.add_image(img, "H4")
 
+    _hoja_flotas_frentes(wb, cfg["_base"], cfg)
     wb.save(ruta_xlsx)
 
 
@@ -557,12 +688,13 @@ def reporte_mensual(cfg, mes_df, mes_label, heatmap_path, ruta_xlsx):
     ws2.add_image(img, "F2")
 
     if heatmap_path and Path(heatmap_path).exists():
-        ws3 = wb.create_sheet("Mapa de calor mensual")
+        ws3 = wb.create_sheet("Producción por sección")
         ws3.sheet_view.showGridLines = False
-        title_row(ws3, 1, 2, f"Mapa de diferencias del mes — {mes_label}")
-        img2 = XLImage(heatmap_path); img2.width = 820; img2.height = 290
+        title_row(ws3, 1, 2, f"Gráfico de producción del mes — {mes_label}")
+        img2 = XLImage(heatmap_path); img2.width = 820; img2.height = 350
         ws3.add_image(img2, "A3")
 
+    _hoja_flotas_frentes(wb, cfg["_base"], cfg)
     wb.save(ruta_xlsx)
 
 
@@ -628,6 +760,9 @@ def procesar_dia(cfg, fecha):
 
     print(f"\n  Procesando vuelo: {fecha.isoformat()}")
 
+    # Volumen objetivo: diferencia entre superficie final de diseño y terreno natural
+    calcular_volumen_objetivo(cfg)
+
     # Cargar baseline
     arr_base, tf_ref, crs_ref, meta_ref = cargar_dem(str(baseline_path))
     pixel_area = abs(tf_ref.a * tf_ref.e)
@@ -636,18 +771,31 @@ def procesar_dia(cfg, fecha):
     # Cargar DSM de hoy (reproyectado a grilla baseline)
     arr_hoy = alinear_dem(str(dsm_hoy), tf_ref, crs_ref, (nrows, ncols))
 
-    # ΔZ vs baseline → acumulado
+    # ΔZ vs baseline → acumulado (siempre respecto al terreno natural)
     dz_acum = arr_hoy - arr_base
 
-    # ΔZ vs ayer → producción del día
+    # ΔZ vs vuelo anterior → producción del día
+    # El primer vuelo siempre se mide contra el DEM inicial (baseline).
+    # Los siguientes se miden contra el DSM del vuelo inmediatamente anterior
+    # en orden cronológico ascendente.
     reg = cargar_registro(base)
-    reg_sorted = reg.sort_values("fecha")
     dsm_ayer = None
-    if not reg_sorted.empty:
-        ayer = reg_sorted.iloc[-1]
-        dsm_ayer_path = base / "vuelos" / pd.Timestamp(ayer["fecha"]).strftime("%Y-%m-%d") / "dsm.tif"
-        if dsm_ayer_path.exists():
-            dsm_ayer = alinear_dem(str(dsm_ayer_path), tf_ref, crs_ref, (nrows, ncols))
+    fecha_ts = pd.Timestamp(fecha)
+    prev_vuelos = reg.sort_values("fecha")
+    prev_vuelos = prev_vuelos[prev_vuelos["fecha"] < fecha_ts]
+    if not prev_vuelos.empty:
+        ref_row = prev_vuelos.iloc[-1]   # vuelo inmediatamente anterior a fecha
+        dsm_ref_path = (base / "vuelos"
+                        / pd.Timestamp(ref_row["fecha"]).strftime("%Y-%m-%d")
+                        / "dsm.tif")
+        if dsm_ref_path.exists():
+            dsm_ayer = alinear_dem(str(dsm_ref_path), tf_ref, crs_ref, (nrows, ncols))
+            print(f"  Ref. diaria: {pd.Timestamp(ref_row['fecha']).strftime('%Y-%m-%d')}")
+        else:
+            print(f"  [!] DSM anterior no encontrado ({dsm_ref_path.name}) — "
+                  f"usando DEM inicial como referencia del día.")
+    else:
+        print(f"  Primer vuelo detectado — referencia diaria = DEM inicial.")
 
     dz_dia = (arr_hoy - dsm_ayer) if dsm_ayer is not None else dz_acum
 
@@ -709,14 +857,15 @@ def procesar_dia(cfg, fecha):
     reg_sec = pd.concat([reg_sec, df_sec_new], ignore_index=True)
     guardar_registro_secciones(base, reg_sec)
 
-    # Heatmap del día
+    # Gráfico de barras del día
     dir_d = base / "reportes" / "diarios"
     dir_d.mkdir(parents=True, exist_ok=True)
     heatmap_path = str(dir_d / f"heatmap_{fecha.isoformat()}.png")
-    generar_heatmap(dz_dia, tf_ref, secs, eje,
-                    f"ΔZ del día {fecha.strftime('%d/%m/%Y')} — producción diaria",
-                    heatmap_path,
-                    cfg["dz_min_plot"], cfg["dz_max_plot"])
+    generar_grafico_volumenes(
+        df_dia, "vol_corte", "vol_relleno",
+        f"Producción del día {fecha.strftime('%d/%m/%Y')} — corte (rojo) / relleno (verde)",
+        heatmap_path,
+    )
 
     # Reporte diario
     ruta_xlsx = str(dir_d / f"reporte_{fecha.isoformat()}.xlsx")
@@ -782,12 +931,17 @@ def procesar_mensual(cfg, reg, fecha_ref):
     secs = crear_secciones(eje, cfg["espaciado_secciones"],
                            cfg["ancho_corredor"], cfg["prog_inicio_m"])
 
+    pixel_area = abs(tf_ref.a * tf_ref.e)
+    df_mes_sec = calcular_volumenes(dz_mes, tf_ref, secs, pixel_area, tmp_mes)
+
     dir_m = base / "reportes" / "mensuales"
     dir_m.mkdir(parents=True, exist_ok=True)
     heatmap_mes = str(dir_m / f"heatmap_{mes_str}.png")
-    generar_heatmap(dz_mes, tf_ref, secs, eje,
-                    f"ΔZ acumulado del mes {mes_str}",
-                    heatmap_mes, cfg["dz_min_plot"], cfg["dz_max_plot"])
+    generar_grafico_volumenes(
+        df_mes_sec, "vol_corte", "vol_relleno",
+        f"Producción acumulada del mes {mes_str} — corte (rojo) / relleno (verde)",
+        heatmap_mes,
+    )
 
     ruta_xlsx = str(dir_m / f"reporte_{mes_str}.xlsx")
     reporte_mensual(cfg, mes_df, mes_str, heatmap_mes, ruta_xlsx)

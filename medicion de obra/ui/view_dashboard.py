@@ -23,7 +23,6 @@ from matplotlib.figure import Figure
 from PIL import Image
 
 from . import theme as T
-from .basemap import build_overlay
 from .state import ProjectState
 from .widgets import (
     Card, DataTable, KPICardIcon, ProgressItem,
@@ -37,6 +36,7 @@ class DashboardView(ctk.CTkFrame):
         self.state = state
         self._fig_bar = None
         self._fig_donut = None
+        self._fig_perfil = None
         self._build()
         self.refresh()
 
@@ -49,6 +49,7 @@ class DashboardView(ctk.CTkFrame):
 
         self._build_header()
         self._build_kpi_grid()
+        self._build_perfil_row()
         self._build_middle_row()
         self._build_bottom_row()
 
@@ -77,82 +78,31 @@ class DashboardView(ctk.CTkFrame):
         ).pack(side="right", padx=(0, 0))
 
 
-    # ── KPI grid + Vista 3D ─────────────────────────────────────────────
+    # ── KPI grid ────────────────────────────────────────────────────────
     def _build_kpi_grid(self):
         top = ctk.CTkFrame(self.scroll, fg_color="transparent")
         top.pack(fill="x", padx=20, pady=(0, 14))
-        top.grid_columnconfigure(0, weight=2, uniform="top")
-        top.grid_columnconfigure(1, weight=1, uniform="top")
-
-        # ── Columna izquierda (2 filas × 3 KPIs) ────────────────────────
-        left = ctk.CTkFrame(top, fg_color="transparent")
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         for c in range(3):
-            left.grid_columnconfigure(c, weight=1, uniform="kpi")
+            top.grid_columnconfigure(c, weight=1, uniform="kpi")
 
-        self.kpi_ter  = KPICardIcon(left, "▲", "green",
+        self.kpi_ter  = KPICardIcon(top, "▲", "green",
                                      "Volumen de Llenos", "—")
-        self.kpi_exc  = KPICardIcon(left, "▲", "red",
+        self.kpi_exc  = KPICardIcon(top, "▲", "red",
                                      "Volumen de Cortes", "—")
-        self.kpi_net  = KPICardIcon(left, "⚖", "dark",
-                                     "Volumen Neto", "—")
-        self.kpi_area = KPICardIcon(left, "📐", "purple",
-                                     "Área Topografiada", "—")
-        self.kpi_pav  = KPICardIcon(left, "🛣", "blue",
-                                     "Longitud Pavimento", "—")
-        self.kpi_avg  = KPICardIcon(left, "📊", "indigo",
+        self.kpi_avg  = KPICardIcon(top, "📊", "indigo",
                                      "Avance General", "—",
                                      delta_suffix="vs semana pasada")
 
-        cards = [self.kpi_ter, self.kpi_exc, self.kpi_net,
-                 self.kpi_area, self.kpi_pav, self.kpi_avg]
-        for i, k in enumerate(cards):
-            r, c = divmod(i, 3)
-            k.grid(row=r, column=c, sticky="nsew", padx=4, pady=4)
+        for c, k in enumerate([self.kpi_ter, self.kpi_exc, self.kpi_avg]):
+            k.grid(row=0, column=c, sticky="nsew", padx=4, pady=4)
 
-        # ── Columna derecha: Vista 3D ───────────────────────────────────
-        v3d = Card(top, title="Vista 3D - Comparación de Superficies",
-                   light=True)
-        v3d.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
-
-        # Basemap: hillshade del DEM + heatmap de cortes/llenos del vuelo
-        self.v3d_holder = ctk.CTkFrame(v3d, height=190, corner_radius=8,
-                                       fg_color=T.HOVER_BG)
-        self.v3d_holder.pack(fill="x", padx=18, pady=(0, 4))
-        self.v3d_holder.pack_propagate(False)
-        self._v3d_img = None
-        self.v3d_caption = ctk.CTkLabel(
-            v3d, text="Rojo = corte · Verde = relleno",
-            font=T.FONT_TINY, text_color=T.TEXT_MUTED)
-        self.v3d_caption.pack(anchor="w", padx=18, pady=(0, 6))
-
-        self._surf_var = ctk.StringVar(value="actual")
-        radios = ctk.CTkFrame(v3d, fg_color="transparent")
-        radios.pack(fill="x", padx=18, pady=(2, 6))
-        for val, txt, sub in [
-            ("actual",   "Superficie actual",   "Último vuelo procesado"),
-            ("anterior", "Superficie anterior", "Vuelo previo"),
-            ("diseno",   "Diseño",              "Superficie de proyecto"),
-        ]:
-            item = ctk.CTkFrame(radios, fg_color="transparent")
-            item.pack(anchor="w", fill="x", pady=2)
-            ctk.CTkRadioButton(
-                item, text=txt, variable=self._surf_var, value=val,
-                font=T.FONT_BODY, text_color=T.TEXT,
-                fg_color=T.PRIMARY, hover_color=T.PRIMARY_HOV,
-                border_color="#D1D5DB",
-            ).pack(anchor="w")
-            ctk.CTkLabel(
-                item, text=sub, font=T.FONT_TINY,
-                text_color=T.TEXT_MUTED, anchor="w",
-            ).pack(anchor="w", padx=(26, 0))
-
-        ctk.CTkButton(
-            v3d, text="Abrir visor 3D",
-            fg_color="transparent", border_width=1,
-            border_color=T.CARD_BORDER,
-            text_color=T.TEXT, hover_color=T.HOVER_BG,
-        ).pack(fill="x", padx=18, pady=(4, 14))
+    # ── Perfil de abscisas (full-width) ─────────────────────────────────
+    def _build_perfil_row(self):
+        self.card_perfil = Card(self.scroll, title="Perfil de Corte / Relleno por Abscisa",
+                                light=True)
+        self.card_perfil.pack(fill="x", padx=20, pady=(0, 14))
+        self.perfil_holder = ctk.CTkFrame(self.card_perfil, fg_color="transparent")
+        self.perfil_holder.pack(fill="both", expand=True, padx=12, pady=(0, 14))
 
     # ── Fila 2: Vuelos | Volúmenes por Período | Donut ──────────────────
     def _build_middle_row(self):
@@ -262,14 +212,12 @@ class DashboardView(ctk.CTkFrame):
         if df.empty:
             self.kpi_ter.set_value("—")
             self.kpi_exc.set_value("—")
-            self.kpi_net.set_value("—")
-            self.kpi_area.set_value(area_str)
-            self.kpi_pav.set_value(long_str)
             self.kpi_avg.set_value("—", delta_suffix="vs semana pasada")
             self._render_flights_empty()
             self._render_bar_chart_empty()
             self._render_donut(0, 0, 0)
-            self._render_basemap(None)
+            self._render_perfil_chart()
+
             self._render_equipos_real()
             self._render_frentes()
             return
@@ -285,10 +233,6 @@ class DashboardView(ctk.CTkFrame):
         self.kpi_exc.set_value(f"{corte:,.0f} m³",
                                self._delta(df, "vol_corte_dia"),
                                delta_up=False)
-        self.kpi_net.set_value(f"{neto:,.0f} m³",
-                               "↑ 0.0%", delta_up=neto >= 0)
-        self.kpi_area.set_value(area_str, "↑ —")
-        self.kpi_pav.set_value(long_str, "↑ —")
         obj = cfg.get("vol_corte_objetivo", 0) or 0
         if obj:
             pct = float(ult.get("vol_corte_acum", 0)) / obj * 100
@@ -301,42 +245,10 @@ class DashboardView(ctk.CTkFrame):
         self._render_flights(df)
         self._render_bar_chart(df)
         self._render_donut(corte, relleno, neto)
-        self._render_basemap(ult["fecha"].strftime("%Y-%m-%d"))
+        self._render_perfil_chart()
+
         self._render_equipos_real()
         self._render_frentes()
-
-    # ── Basemap (hillshade + heatmap cortes/llenos) ─────────────────────
-    def _render_basemap(self, fecha):
-        holder = getattr(self, "v3d_holder", None)
-        if holder is None:
-            return
-        for w in holder.winfo_children():
-            w.destroy()
-
-        dz_path = self.state.dz_dia_path(fecha) if fecha else None
-        if dz_path is None:
-            dz_path = self.state.ultimo_dz_dia()
-        dem_path = self.state.dem_baseline_path()
-
-        img = build_overlay(dem_path, dz_path) if dz_path else None
-        if img is None:
-            self._v3d_img = None
-            ctk.CTkLabel(
-                holder, text="Sin datos de cortes/llenos para mostrar",
-                font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
-            ).place(relx=0.5, rely=0.5, anchor="center")
-            return
-
-        holder.update_idletasks()
-        avail_w = max(holder.winfo_width() - 4, 360)
-        avail_h = max(holder.winfo_height() - 4, 150)
-        ratio = min(avail_w / img.width, avail_h / img.height)
-        size = (max(int(img.width * ratio), 120),
-                max(int(img.height * ratio), 60))
-        self._v3d_img = ctk.CTkImage(light_image=img, dark_image=img,
-                                     size=size)
-        ctk.CTkLabel(holder, image=self._v3d_img, text="").place(
-            relx=0.5, rely=0.5, anchor="center")
 
     # ── Helpers ─────────────────────────────────────────────────────────
     def _load_history_safe(self):
@@ -478,6 +390,79 @@ class DashboardView(ctk.CTkFrame):
                 txt += f"  ({pct:.1f}%)"
             ctk.CTkLabel(r, text=txt, font=T.FONT_SMALL,
                          text_color=T.TEXT_MUTED).pack(side="right")
+
+    def _render_perfil_chart(self):
+        # Limpia el contenedor
+        if self._fig_perfil is not None:
+            try:
+                plt.close(self._fig_perfil)
+            except Exception:
+                pass
+            self._fig_perfil = None
+        for w in self.perfil_holder.winfo_children():
+            w.destroy()
+
+        perfil_obj = self.state.load_perfil_objetivo()
+        perfil_av, fecha_av = self.state.load_perfil_avance()
+
+        if not perfil_obj:
+            ctk.CTkLabel(
+                self.perfil_holder,
+                text="Sin datos de perfil objetivo. Procese un vuelo para generar el perfil.",
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+            ).pack(anchor="center", pady=30)
+            return
+
+        abs_obj = [p["abs"] for p in perfil_obj]
+        corte_obj  = [-p["corte_m3"]  for p in perfil_obj]
+        relleno_obj = [ p["relleno_m3"] for p in perfil_obj]
+
+        if perfil_av:
+            abs_av     = [p["abs"] for p in perfil_av]
+            corte_av   = [-p["corte_m3"]  for p in perfil_av]
+            relleno_av = [ p["relleno_m3"] for p in perfil_av]
+        else:
+            abs_av = abs_obj
+            corte_av   = [0.0] * len(abs_obj)
+            relleno_av = [0.0] * len(abs_obj)
+
+        plt.style.use("default")
+        bg   = T.mc(T.CARD_BG)
+        axis = T.mc(T.AXIS_FG)
+        grid = T.mc(T.GRID_COLOR)
+
+        fig = Figure(figsize=(14, 3.6), dpi=100, facecolor=bg)
+        self._fig_perfil = fig
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(bg)
+
+        # 4 líneas según especificación
+        ax.plot(abs_obj, corte_obj,  color="#EF4444", lw=1.8,
+                label="Corte total objetivo",   zorder=4)
+        ax.plot(abs_av,  corte_av,   color="#D946EF", lw=1.8, ls="--",
+                label=f"Corte acumulado{' · ' + fecha_av if fecha_av else ''}",
+                zorder=5)
+        ax.plot(abs_obj, relleno_obj, color="#166534", lw=1.8,
+                label="Lleno total objetivo",   zorder=4)
+        ax.plot(abs_av,  relleno_av,  color="#84CC16", lw=1.8, ls="--",
+                label=f"Lleno acumulado{' · ' + fecha_av if fecha_av else ''}",
+                zorder=5)
+
+        ax.axhline(0, color=grid, lw=0.8, zorder=1)
+        ax.set_xlabel("Abscisa (m)", fontsize=9, color=axis)
+        ax.set_ylabel("Excavación (−) / Relleno (+)  [m³]", fontsize=9, color=axis)
+        ax.legend(fontsize=8, frameon=False, loc="upper left",
+                  ncol=4, bbox_to_anchor=(0, 1.14), labelcolor=axis)
+        ax.grid(axis="y", ls=":", color=grid, alpha=0.7)
+        ax.grid(axis="x", ls=":", color=grid, alpha=0.4)
+        ax.tick_params(colors=axis, labelsize=8)
+        for sp in ax.spines.values():
+            sp.set_color(grid)
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=self.perfil_holder)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
 
     def _clear_canvas(self, which: str):
         target, fig = (

@@ -12,8 +12,8 @@
   "factor_contraccion": 0.9,
   "epsg_proyecto": 9377,
   "paso_muestreo_landxml": 4,
-  "vol_corte_objetivo": 15000.0,
-  "vol_relleno_objetivo": 25000.0,
+  "vol_corte_objetivo": 0.0,
+  "vol_relleno_objetivo": 35764.0,
   "dz_min_plot": -3.0,
   "dz_max_plot": 3.0,
   "frentes": [
@@ -26,6 +26,12 @@
       "nombre": "FRENTE 2 terraplen",
       "abs_ini": 2800.0,
       "abs_fin": 3000.0
+    },
+    {
+      "nombre": "FRENTE 3 TERRAPLEN",
+      "encargado": "Kelly Guette",
+      "abs_ini": 2780.0,
+      "abs_fin": 2800.0
     }
   ]
 }

@@ -144,7 +144,12 @@ class App(ctk.CTk):
 
 
 def main():
-    base = Path(__file__).resolve().parent.parent
+    import sys
+    if getattr(sys, "frozen", False):
+        # Ejecutando como .exe de PyInstaller — datos junto al ejecutable
+        base = Path(sys.executable).resolve().parent
+    else:
+        base = Path(__file__).resolve().parent.parent
     app = App(base)
     app.mainloop()
 

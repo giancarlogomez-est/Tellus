@@ -170,7 +170,7 @@ class DiarioView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             up_hdr, text="Cargar DEM diario",
-            font=T.FONT_H2, text_color=T.TEXT, anchor="w",
+            font=T.FONT_H2, text_color=T.PRIMARY, anchor="w",
         ).pack(side="left")
 
         self._dem_toggle_btn = ctk.CTkButton(
@@ -219,7 +219,7 @@ class DiarioView(ctk.CTkFrame):
         hint.pack(side="left", anchor="n", pady=8)
 
         # ── Tarjeta: lista de DEMs ───────────────────────────────────────
-        list_card = Card(self, title="DEMs disponibles")
+        list_card = Card(self, title="DEMs disponibles", title_color=T.PRIMARY)
         list_card.pack(fill="x", padx=20, pady=(0, 14))
 
         # Cabecera de columnas
@@ -252,22 +252,6 @@ class DiarioView(ctk.CTkFrame):
             border_color=T.CARD_BORDER, text_color=T.TEXT_MUTED,
             hover_color=T.HOVER_BG, command=self.refresh,
         ).place(relx=1.0, rely=0.0, anchor="ne", x=-14, y=10)
-
-        # ── Tarjeta: opciones pipeline ───────────────────────────────────
-        opts = Card(self, title="Opciones del pipeline")
-        opts.pack(fill="x", padx=20, pady=(0, 14))
-        col = ctk.CTkFrame(opts, fg_color="transparent")
-        col.pack(fill="x", padx=18, pady=(0, 14))
-
-        self.var_sem = ctk.BooleanVar()
-        self.var_men = ctk.BooleanVar()
-        ctk.CTkCheckBox(col, text="Forzar reporte semanal",
-                        variable=self.var_sem).pack(anchor="w", pady=3)
-        ctk.CTkCheckBox(col, text="Forzar reporte mensual",
-                        variable=self.var_men).pack(anchor="w", pady=3)
-        ctk.CTkLabel(col, font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
-                     text="Por defecto, el reporte semanal se genera los lunes y el mensual el día 1."
-                     ).pack(anchor="w", pady=(8, 0))
 
         # ── Barra inferior ───────────────────────────────────────────────
         bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -360,20 +344,29 @@ class DiarioView(ctk.CTkFrame):
         ).pack(anchor="w", padx=18, pady=(0, 4))
 
         self._status_body = ctk.CTkFrame(self._insumos_body, fg_color="transparent")
-        self._status_body.pack(fill="x", padx=18, pady=(0, 14))
+        self._status_body.pack(fill="x", padx=18, pady=(0, 10))
 
-        btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.pack(fill="x", padx=20, pady=(0, 20))
-        self.btn_calc = ctk.CTkButton(
-            btn_row, text="▶  Calcular Volúmenes ΔZ",
-            height=44, width=260,
-            font=T.FONT_H2,
+        # ── Validar volumen objetivo ──────────────────────────────────────
+        val_row = ctk.CTkFrame(self._insumos_body, fg_color="transparent")
+        val_row.pack(fill="x", padx=18, pady=(4, 18))
+
+        self.btn_validar = ctk.CTkButton(
+            val_row,
+            text="▶  Validar volumen objetivo",
+            height=36, width=240,
+            font=T.FONT_BODY,
             fg_color=T.PRIMARY, hover_color=T.PRIMARY_HOV,
             text_color=T.TEXT_ON_DARK,
-            command=self._calcular_volumenes,
             state="disabled",
+            command=self._validar_volumen_objetivo,
         )
-        self.btn_calc.pack(side="right")
+        self.btn_validar.pack(side="left")
+
+        self._vol_obj_lbl = ctk.CTkLabel(
+            val_row, text="",
+            font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
+        )
+        self._vol_obj_lbl.pack(side="left", padx=(16, 0))
 
     def _toggle_insumos(self):
         self._collapsed_insumos = not self._collapsed_insumos
@@ -494,14 +487,54 @@ class DiarioView(ctk.CTkFrame):
                 font=T.FONT_TINY, text_color=T.TEXT_MUTED, anchor="w",
             ).pack(side="left")
 
-        self.btn_calc.configure(state="normal" if all_ok else "disabled")
+        self.btn_validar.configure(state="normal" if all_ok else "disabled")
 
-    def _calcular_volumenes(self):
-        from .runner import ProcessDialog
-        ProcessDialog(
-            self.winfo_toplevel(),
-            titulo="Calculando Volúmenes ΔZ",
-            popen_factory=self.state.run_odm,
+        # Mostrar volúmenes ya calculados si existen en config
+        cfg = self.state.load_config() or {}
+        vc = cfg.get("vol_corte_objetivo", 0) or 0
+        vr = cfg.get("vol_relleno_objetivo", 0) or 0
+        if vc or vr:
+            self._vol_obj_lbl.configure(
+                text=f"Corte: {vc:,.0f} m³   Relleno: {vr:,.0f} m³"
+            )
+        else:
+            self._vol_obj_lbl.configure(text="")
+
+    # ── Validar volumen objetivo ─────────────────────────────────────────────
+
+    def _validar_volumen_objetivo(self):
+        import threading
+        self.btn_validar.configure(state="disabled", text="Calculando…")
+        self._vol_obj_lbl.configure(text="")
+
+        def _run():
+            try:
+                vol_c, vol_r = self.state.calcular_volumen_objetivo()
+                self.after(0, lambda: self._on_volumen_calculado(vol_c, vol_r))
+            except Exception as exc:
+                err = str(exc)
+                def _on_err():
+                    messagebox.showerror(
+                        "Error al calcular", err, parent=self.winfo_toplevel())
+                    self.btn_validar.configure(
+                        state="normal", text="▶  Validar volumen objetivo")
+                self.after(0, _on_err)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_volumen_calculado(self, vol_c: float, vol_r: float):
+        self.btn_validar.configure(
+            state="normal", text="▶  Validar volumen objetivo")
+        self._vol_obj_lbl.configure(
+            text=f"Corte: {vol_c:,.0f} m³   Relleno: {vol_r:,.0f} m³"
+        )
+        messagebox.showinfo(
+            "Volumen objetivo calculado",
+            f"Diferencia  DEM Final − DEM Inicial:\n\n"
+            f"  Corte:    {vol_c:,.2f} m³\n"
+            f"  Relleno:  {vol_r:,.2f} m³\n\n"
+            f"Los valores se guardaron en proyecto_config.json.",
+            parent=self.winfo_toplevel(),
         )
 
     # ── Toggle cargar DEM ────────────────────────────────────────────────────
@@ -695,8 +728,7 @@ class DiarioView(ctk.CTkFrame):
         ProcessDialog(
             self.winfo_toplevel(),
             titulo=f"Pipeline diario — {fecha}",
-            popen_factory=lambda: self.state.run_pipeline(
-                fecha, self.var_sem.get(), self.var_men.get()),
+            popen_factory=lambda: self.state.run_pipeline(fecha, False, False),
             on_done=lambda ok: (ok and self._post_procesado()),
         )
 

@@ -102,7 +102,7 @@ class Card(ctk.CTkFrame):
 
     def __init__(self, master, title: str | None = None,
                  action_text: str | None = None, action_cmd=None,
-                 light: bool = False, **kw):
+                 light: bool = False, title_color=None, **kw):
         if light:
             kw.setdefault("fg_color", T.CARD_BG)
             kw.setdefault("border_color", T.CARD_BORDER)
@@ -113,11 +113,11 @@ class Card(ctk.CTkFrame):
             header = ctk.CTkFrame(self, fg_color="transparent", height=36)
             header.pack(fill="x", padx=18, pady=(14, 4))
             header.pack_propagate(False)
-            title_color = T.TEXT if light else None
+            resolved_color = title_color or (T.TEXT if light else None)
             t = ctk.CTkLabel(header, text=title, font=T.FONT_H2,
                              anchor="w",
-                             **({"text_color": title_color}
-                                if title_color else {}))
+                             **({"text_color": resolved_color}
+                                if resolved_color else {}))
             t.pack(side="left")
             if action_text:
                 ctk.CTkButton(
@@ -248,35 +248,32 @@ class UploadCard(tk.Frame):
                          bg=bg, **kw)
         self.pack_propagate(False)
         self._on_upload = on_upload
+        self._loaded: "Path | None" = loaded_path
 
         self._canvas = tk.Canvas(self, width=_UPLOAD_CARD_W, height=_UPLOAD_CARD_H,
                                  bg=bg, highlightthickness=0, cursor="hand2")
         self._canvas.place(x=0, y=0)
         self._draw_border(loaded_path is not None)
 
-        # Ícono personalizable
         self._canvas.create_text(
             _UPLOAD_CARD_W // 2, 68,
             text=icon, font=("Segoe UI Emoji", 34),
             fill=_UPLOAD_AMBER, tags="click",
         )
-        # Número + nombre
         prefix = f"{number}. " if number else ""
-        self._canvas.create_text(
+        self._name_item = self._canvas.create_text(
             _UPLOAD_CARD_W // 2, 122,
             text=f"{prefix}{label}",
             font=("Segoe UI", 11, "bold"),
             fill=T.mc(T.TEXT),
             width=_UPLOAD_CARD_W - 24, tags="click",
         )
-        # Formato / extensión
-        self._canvas.create_text(
+        self._fmt_item = self._canvas.create_text(
             _UPLOAD_CARD_W // 2, 144,
             text=fmt, font=("Segoe UI", 8),
             fill=T.mc(T.TEXT_MUTED), tags="click",
         )
-        # Chip de archivo (fondo + texto)
-        self._canvas.create_rectangle(
+        self._chip_rect = self._canvas.create_rectangle(
             14, _UPLOAD_CARD_H - 34, _UPLOAD_CARD_W - 14, _UPLOAD_CARD_H - 14,
             fill=T.mc(T.HOVER_BG), outline="", tags="click",
         )
@@ -293,12 +290,27 @@ class UploadCard(tk.Frame):
 
     # ── API pública ──────────────────────────────────────────────────────
     def set_loaded(self, p: "Path | None"):
+        self._loaded = p
         self._draw_border(p is not None)
         self._canvas.itemconfigure(
             self._chip,
             text=self._fmt_name(p),
             fill=T.mc(T.SUCCESS if p else T.TEXT_MUTED),
         )
+
+    def refresh_theme(self):
+        """Actualiza todos los colores al tema actual (claro/oscuro)."""
+        bg = T.mc(T.CARD_BG)
+        self.configure(bg=bg)
+        self._canvas.configure(bg=bg)
+        self._canvas.itemconfigure(self._name_item, fill=T.mc(T.TEXT))
+        self._canvas.itemconfigure(self._fmt_item, fill=T.mc(T.TEXT_MUTED))
+        self._canvas.itemconfigure(self._chip_rect, fill=T.mc(T.HOVER_BG))
+        self._canvas.itemconfigure(
+            self._chip,
+            fill=T.mc(T.SUCCESS if self._loaded else T.TEXT_MUTED),
+        )
+        self._draw_border(self._loaded is not None)
 
     # ── Helpers ──────────────────────────────────────────────────────────
     def _draw_border(self, loaded: bool):

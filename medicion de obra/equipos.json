@@ -1,21 +1,42 @@
 {
   "equipos": [
     {
-      "id": "eq_5bb48aed",
-      "nombre": "ct4545",
-      "tipo": "Bulldozer",
-      "marca": "CATERPILLAR D5",
-      "capacidad_nominal": 100.0,
+      "id": "eq_8767cf42",
+      "nombre": "E1208001",
+      "tipo": "Excavadora",
+      "marca": "Caterpillar 336",
+      "capacidad_nominal": 300.0,
+      "unidad_produccion": "m³"
+    },
+    {
+      "id": "eq_66acebf4",
+      "nombre": "V1209001",
+      "tipo": "Volqueta",
+      "marca": "mack",
+      "capacidad_nominal": 2000.0,
+      "unidad_produccion": "m³"
+    },
+    {
+      "id": "eq_8dc2a2bf",
+      "nombre": "V1209002",
+      "tipo": "Volqueta",
+      "marca": "Mack",
+      "capacidad_nominal": 2000.0,
       "unidad_produccion": "m³"
     }
   ],
   "flotas": [
     {
-      "id": "fl_8938efb7",
+      "id": "fl_5ba0b8fd",
       "nombre": "Flota 1",
-      "tramo": "K0+000-K0+500",
+      "tramo": "K2+780 - K2+800",
+      "frente_nombre": "FRENTE 3 TERRAPLEN",
+      "frente_abs_ini": 2780.0,
+      "frente_abs_fin": 2800.0,
       "equipo_ids": [
-        "eq_5bb48aed"
+        "eq_8767cf42",
+        "eq_66acebf4",
+        "eq_8dc2a2bf"
       ]
     }
   ]
