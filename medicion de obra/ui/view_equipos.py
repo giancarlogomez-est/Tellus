@@ -496,6 +496,22 @@ class EquiposView(ctk.CTkFrame):
             dropdown_fg_color=T.CARD_BG, dropdown_text_color=T.TEXT,
         ).grid(row=1, column=1, sticky="ew", padx=4, pady=(0, 8))
 
+        # ── Selector de vuelo ──────────────────────────────────────────
+        ctk.CTkLabel(ctrl, text="Vuelo para calcular producción",
+                     font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+                     anchor="w").grid(row=0, column=2, sticky="w", padx=4, pady=(0, 2))
+        vuelos_proc = sorted(self.state.vuelos_procesados(), reverse=True)
+        _SIN_VUELO = "— sin vuelos procesados —"
+        vuelo_options = vuelos_proc if vuelos_proc else [_SIN_VUELO]
+        vuelo_var = ctk.StringVar(value=vuelo_options[0])
+        ctk.CTkOptionMenu(
+            ctrl, values=vuelo_options, variable=vuelo_var,
+            fg_color=T.INPUT_BG, button_color=T.INPUT_BG,
+            button_hover_color=T.INPUT_HOVER, text_color=T.TEXT,
+            dropdown_fg_color=T.CARD_BG, dropdown_text_color=T.TEXT,
+            state="normal" if vuelos_proc else "disabled",
+        ).grid(row=1, column=2, sticky="ew", padx=4, pady=(0, 8))
+
         msg_var = ctk.StringVar()
         msg_lbl = ctk.CTkLabel(ctrl, textvariable=msg_var, font=T.FONT_SMALL,
                                text_color=T.DANGER, anchor="w")
@@ -578,7 +594,8 @@ class EquiposView(ctk.CTkFrame):
             e_horas.bind("<KeyRelease>", _upd)
             e_prod.bind("<KeyRelease>", _upd)
             row_entries.append({"equipo": eq, "flota": fl,
-                                 "e_horas": e_horas, "e_prod": e_prod})
+                                 "e_horas": e_horas, "e_prod": e_prod,
+                                 "_upd": _upd})
 
         def _guardar_registro():
             fecha_str = fecha_var.get().strip()
@@ -634,13 +651,112 @@ class EquiposView(ctk.CTkFrame):
             if self.on_updated:
                 self.on_updated()
 
+        drone_src_var = ctk.StringVar()
+        drone_src_lbl = ctk.CTkLabel(
+            entry_card, textvariable=drone_src_var,
+            font=T.FONT_TINY, text_color=T.TEXT_MUTED, anchor="w",
+        )
+        drone_src_lbl.pack(padx=22, pady=(2, 0), anchor="w")
+
+        def _cargar_desde_vuelo():
+            fecha_str = vuelo_var.get().strip()
+            if fecha_str == _SIN_VUELO or not fecha_str:
+                drone_src_var.set("⚠  No hay vuelos procesados disponibles")
+                drone_src_lbl.configure(text_color=T.TEXT_MUTED)
+                return
+            try:
+                date.fromisoformat(fecha_str)
+            except ValueError:
+                drone_src_var.set("⚠  Fecha de vuelo inválida")
+                drone_src_lbl.configure(text_color=T.DANGER)
+                return
+
+            # Cache volúmenes por frente para no leer el CSV varias veces
+            frente_vols: dict[tuple, tuple[float, float]] = {}
+            loaded = 0
+            resumen_frentes: list[str] = []
+
+            for entry in row_entries:
+                fl = entry["flota"]
+                if not fl:
+                    continue
+                abs_ini = fl.get("frente_abs_ini")
+                abs_fin = fl.get("frente_abs_fin")
+                if abs_ini is None or abs_fin is None:
+                    continue
+                key = (float(abs_ini), float(abs_fin))
+                if key not in frente_vols:
+                    c, r = self.state.load_volumen_frente_dia(
+                        fecha_str, key[0], key[1])
+                    frente_vols[key] = (c, r)
+
+                corte, relleno = frente_vols[key]
+                vol_total = corte + relleno
+                if vol_total == 0:
+                    continue
+
+                # Equipos en el mismo frente
+                frente_eqs = [
+                    e for e in row_entries
+                    if e["flota"]
+                    and float(e["flota"].get("frente_abs_ini", -1)) == key[0]
+                    and float(e["flota"].get("frente_abs_fin", -1)) == key[1]
+                ]
+                total_cap = sum(
+                    float(e["equipo"].get("capacidad_nominal", 0) or 0)
+                    for e in frente_eqs
+                )
+                cap = float(entry["equipo"].get("capacidad_nominal", 0) or 0)
+                if total_cap > 0 and cap > 0:
+                    vol_eq = (cap / total_cap) * vol_total
+                elif frente_eqs:
+                    vol_eq = vol_total / len(frente_eqs)
+                else:
+                    continue
+
+                entry["e_prod"].delete(0, "end")
+                entry["e_prod"].insert(0, f"{vol_eq:.1f}")
+                entry["_upd"]()
+                loaded += 1
+
+                # Resumen por frente (una vez por frente único)
+                fn = fl.get("frente_nombre", "")
+                tag = f"{fn}: {vol_total:,.1f} m³" if fn else f"{vol_total:,.1f} m³"
+                if tag not in resumen_frentes:
+                    resumen_frentes.append(tag)
+
+            if loaded > 0:
+                resumen = "  |  ".join(resumen_frentes)
+                drone_src_var.set(
+                    f"📡 {loaded} equipo(s) cargados desde vuelo {fecha_str}"
+                    + (f"  →  {resumen}" if resumen else "")
+                )
+                drone_src_lbl.configure(text_color=T.SUCCESS)
+            else:
+                drone_src_var.set(
+                    f"⚠  Sin datos de vuelo para {fecha_str} "
+                    "— ingresa la producción manualmente"
+                )
+                drone_src_lbl.configure(text_color=T.TEXT_MUTED)
+
+        btns_frame = ctk.CTkFrame(entry_card, fg_color="transparent")
+        btns_frame.pack(fill="x", padx=18, pady=(6, 14))
+
         ctk.CTkButton(
-            entry_card, text="💾  Guardar registro del día",
+            btns_frame, text="📡  Cargar desde vuelo",
+            command=_cargar_desde_vuelo,
+            fg_color=T.HOVER_BG, hover_color=T.CARD_BORDER,
+            text_color=T.TEXT, font=T.FONT_BODY,
+            height=36, corner_radius=8,
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            btns_frame, text="💾  Guardar registro del día",
             command=_guardar_registro,
             fg_color=T.PRIMARY, hover_color=T.PRIMARY_HOV,
             text_color=T.TEXT_ON_DARK, font=T.FONT_BODY,
             height=36, corner_radius=8,
-        ).pack(padx=18, pady=(4, 14), anchor="e")
+        ).pack(side="right")
 
     # ═══════════════════════════════════════════════════════════════════
     # TAB 4 — Rendimientos
@@ -650,13 +766,11 @@ class EquiposView(ctk.CTkFrame):
 
         # ── KPIs de resumen ────────────────────────────────────────────
         if not df_raw.empty:
-            today = df_raw["fecha"].max()
-            today_df = df_raw[df_raw["fecha"] == today]
-            equipo_count = int(today_df["equipo_nombre"].nunique())
-            avg_rend = float(today_df["rendimiento"].mean()) if not today_df.empty else 0.0
+            equipo_count = int(df_raw["equipo_nombre"].nunique())
+            nonzero = df_raw[df_raw["rendimiento"] > 0]["rendimiento"]
+            avg_rend = float(nonzero.mean()) if not nonzero.empty else 0.0
             total_rec = len(df_raw)
         else:
-            today = None
             equipo_count = 0
             avg_rend = 0.0
             total_rec = 0
@@ -665,10 +779,10 @@ class EquiposView(ctk.CTkFrame):
         kpi_row.pack(fill="x", pady=(12, 8))
         kpi_row.grid_columnconfigure((0, 1, 2), weight=1)
         for col, (icon, chip, lbl, val) in enumerate([
-            ("🚜", "blue",   "Equipos activos hoy",  str(equipo_count)),
-            ("📈", "green",  "Rend. promedio (hoy)",
+            ("🚜", "blue",   "Equipos con registros", str(equipo_count)),
+            ("📈", "green",  "Rend. promedio",
              f"{avg_rend:.2f} u/h" if avg_rend else "—"),
-            ("📅", "indigo", "Registros totales",    str(total_rec)),
+            ("📅", "indigo", "Registros totales",     str(total_rec)),
         ]):
             KPICardIcon(kpi_row, icon, chip, lbl, val).grid(
                 row=0, column=col, sticky="nsew", padx=4)
@@ -721,7 +835,8 @@ class EquiposView(ctk.CTkFrame):
             rend_str     = f"{rend_val:.2f} {u}/h" if pd.notna(rend_val) else "—"
             rend_ant_str = f"{rend_ant_val:.2f}" if pd.notna(rend_ant_val) else "—"
             horas_str    = f"{horas_val:.1f} h" if pd.notna(horas_val) else "—"
-            frente_str   = str(frente_n) if frente_n and pd.notna(frente_n) else "—"
+            frente_str   = (str(frente_n) if (frente_n and pd.notna(frente_n)
+                            and str(frente_n).strip() not in ("", "nan")) else "—")
 
             var_pct = r.get("variacion_pct")
             if pd.notna(var_pct):
@@ -753,46 +868,56 @@ class EquiposView(ctk.CTkFrame):
                             light=True)
             sum_card.pack(fill="x", pady=(0, 8))
 
-            latest_date = df_raw["fecha"].max()
-            day_df = df_raw[df_raw["fecha"] == latest_date]
-            if not day_df.empty:
-                has_frente = "frente_nombre" in day_df.columns
+            has_frente = "frente_nombre" in df_raw.columns
 
-                agg_cols: dict = {
-                    "equipos":          ("equipo_nombre", "nunique"),
-                    "horas_totales":    ("horas_trabajadas", "sum"),
-                    "produccion_total": ("produccion", "sum"),
-                }
-                group_by = ["flota_nombre"]
-                if has_frente:
-                    agg_cols["frente_n"] = ("frente_nombre", "first")
-
-                grouped = (
-                    day_df.groupby(group_by)
-                    .agg(**agg_cols)
-                    .reset_index()
+            agg_cols: dict = {
+                "equipos":          ("equipo_nombre", "nunique"),
+                "horas_totales":    ("horas_trabajadas", "sum"),
+                "produccion_total": ("produccion", "sum"),
+            }
+            if has_frente:
+                agg_cols["frente_n"] = (
+                    "frente_nombre",
+                    lambda s: next(
+                        (v for v in s
+                         if v and str(v).strip() not in ("", "nan")),
+                        "",
+                    ),
                 )
 
-                col_names = ["Flota", "Frente", "Equipos",
-                             "Horas totales", "Producción total", "Rend. flota"]
-                col_widths = [160, 130, 70, 110, 130, 120]
-                s_tbl = DataTable(sum_card, columns=col_names, widths=col_widths)
-                s_tbl.pack(fill="x", padx=18, pady=(0, 14))
-                for _, row in grouped.iterrows():
-                    ht = float(row["horas_totales"])
-                    pt = float(row["produccion_total"])
-                    rf = pt / ht if ht > 0 else 0.0
-                    fn = str(row.get("frente_n", "") or "—") if has_frente else "—"
-                    s_tbl.add_row([
-                        row["flota_nombre"],
-                        fn,
-                        str(int(row["equipos"])),
-                        f"{ht:.1f} h",
-                        f"{pt:,.1f}",
-                        f"{rf:.2f} u/h",
-                    ])
-                ctk.CTkLabel(
-                    sum_card,
-                    text=f"Datos del {latest_date.strftime('%d/%m/%Y')}",
-                    font=T.FONT_TINY, text_color=T.TEXT_MUTED,
-                ).pack(anchor="e", padx=18, pady=(0, 8))
+            grouped = (
+                df_raw.groupby("flota_nombre")
+                .agg(**agg_cols)
+                .reset_index()
+            )
+
+            col_names = ["Flota", "Frente", "Equipos",
+                         "Horas totales", "Producción total", "Rend. flota"]
+            col_widths = [160, 130, 70, 110, 130, 120]
+            s_tbl = DataTable(sum_card, columns=col_names, widths=col_widths)
+            s_tbl.pack(fill="x", padx=18, pady=(0, 14))
+            for _, row in grouped.iterrows():
+                ht = float(row["horas_totales"])
+                pt = float(row["produccion_total"])
+                rf = pt / ht if ht > 0 else 0.0
+                fn_raw = row.get("frente_n") if has_frente else None
+                fn = ("—" if (fn_raw is None or pd.isna(fn_raw)
+                              or str(fn_raw).strip() in ("", "nan"))
+                      else str(fn_raw))
+                s_tbl.add_row([
+                    row["flota_nombre"],
+                    fn,
+                    str(int(row["equipos"])),
+                    f"{ht:.1f} h",
+                    f"{pt:,.1f}",
+                    f"{rf:.2f} u/h",
+                ])
+            fecha_min = df_raw["fecha"].min().strftime("%d/%m/%Y")
+            fecha_max = df_raw["fecha"].max().strftime("%d/%m/%Y")
+            periodo = (fecha_min if fecha_min == fecha_max
+                       else f"{fecha_min} – {fecha_max}")
+            ctk.CTkLabel(
+                sum_card,
+                text=f"Período: {periodo}",
+                font=T.FONT_TINY, text_color=T.TEXT_MUTED,
+            ).pack(anchor="e", padx=18, pady=(0, 8))

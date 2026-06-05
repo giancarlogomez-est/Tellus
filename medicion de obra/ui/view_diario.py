@@ -729,11 +729,20 @@ class DiarioView(ctk.CTkFrame):
             self.winfo_toplevel(),
             titulo=f"Pipeline diario — {fecha}",
             popen_factory=lambda: self.state.run_pipeline(fecha, False, False),
-            on_done=lambda ok: (ok and self._post_procesado()),
+            on_done=lambda ok: (ok and self._post_procesado(fecha)),
         )
 
-    def _post_procesado(self):
+    def _post_procesado(self, fecha: str | None = None):
         self.refresh()
         if self.on_processed:
             self.on_processed()
+        # Recalcular perfil de avance automáticamente si hay frentes configurados
+        if fecha and self.state.load_frentes():
+            from .runner import ProcessDialog as _PD
+            _PD(
+                self.winfo_toplevel(),
+                titulo=f"Actualizando perfil de avance — {fecha}",
+                popen_factory=lambda: self.state.run_volumen_frentes(fecha),
+                on_done=lambda ok: (ok and self.on_processed and self.on_processed()),
+            )
 

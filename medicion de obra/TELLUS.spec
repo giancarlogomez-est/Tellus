@@ -65,7 +65,9 @@ hidden_imports = [
     "ui.view_dashboard", "ui.view_diario", "ui.view_dron",
     "ui.view_equipos", "ui.view_reportes", "ui.view_config",
     "ui.view_3d", "ui.view_perfil", "ui.widgets", "ui.runner",
-    "ui.dem_utils", "ui.eje_utils", "ui.basemap",
+    "ui.dem_utils", "ui.eje_utils", "ui.basemap", "ui.pdf_utils",
+    # PDF generation
+    "matplotlib.backends.backend_pdf",
     # stdlib que PyInstaller a veces omite
     "tkinter", "tkinter.messagebox", "tkinter.filedialog",
     "threading", "json", "shutil",

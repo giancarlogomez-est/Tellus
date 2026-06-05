@@ -764,7 +764,7 @@ class VolumenesView(ctk.CTkFrame):
         card.pack(fill="x", padx=20, pady=(0, 32))
         ctk.CTkLabel(
             card,
-            text="Día procesado (★) comparado con los 5 días anteriores registrados.",
+            text="Día procesado más reciente (★). Numeración consecutiva desde el primer vuelo cargado.",
             font=T.FONT_SMALL, text_color=T.TEXT_MUTED, anchor="w",
         ).pack(anchor="w", padx=18, pady=(0, 10))
         self._hist_body = ctk.CTkFrame(card, fg_color="transparent")
@@ -810,13 +810,16 @@ class VolumenesView(ctk.CTkFrame):
             ).pack(anchor="w", pady=10)
             return
 
-        # Últimos 6 registros con volumen correspondientes a vuelos cargados, más reciente primero
+        # Todos los registros con volumen, más reciente primero
         df = (
             df.sort_values("fecha")
-            .tail(6)
             .iloc[::-1]
             .reset_index(drop=True)
         )
+
+        # Numerar vuelos desde la primera fecha cargada en "Vuelos y modelos DEM"
+        all_vuelos_sorted = sorted(self.state.vuelos_disponibles())
+        vuelo_rank = {v: i + 1 for i, v in enumerate(all_vuelos_sorted)}
 
         _COLS = [
             ("FECHA",             130),
@@ -840,6 +843,10 @@ class VolumenesView(ctk.CTkFrame):
         ctk.CTkFrame(self._hist_body, height=1,
                      fg_color=T.CARD_BORDER).pack(fill="x", pady=(2, 4))
 
+        rows_frame = ctk.CTkScrollableFrame(
+            self._hist_body, fg_color="transparent", height=300)
+        rows_frame.pack(fill="x")
+
         for i in range(len(df)):
             r         = df.iloc[i]
             is_latest = (i == 0)
@@ -847,7 +854,8 @@ class VolumenesView(ctk.CTkFrame):
             corte   = float(r.get("vol_corte_dia",   0) or 0)
             relleno = float(r.get("vol_relleno_dia", 0) or 0)
             balance = float(r.get("balance_dia",     0) or 0)
-            vuelo   = int(r.get("vuelo_num", 0) or 0)
+            fecha_key = r["fecha"].strftime("%Y-%m-%d")
+            vuelo = vuelo_rank.get(fecha_key, int(r.get("vuelo_num", 0) or 0))
 
             # Δ respecto al día anterior en la lista (= siguiente en el tiempo)
             delta_c_txt, delta_c_col = "—", T.TEXT_MUTED
@@ -880,7 +888,7 @@ class VolumenesView(ctk.CTkFrame):
             bal_color = T.DANGER if balance < 0 else T.SUCCESS
 
             row_frame = ctk.CTkFrame(
-                self._hist_body, fg_color=row_bg, corner_radius=6)
+                rows_frame, fg_color=row_bg, corner_radius=6)
             row_frame.pack(fill="x", pady=2)
 
             cells = [

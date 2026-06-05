@@ -31,12 +31,14 @@ from .widgets import (
 
 
 class DashboardView(ctk.CTkFrame):
-    def __init__(self, master, state: ProjectState):
+    def __init__(self, master, state: ProjectState, navigate=None):
         super().__init__(master, fg_color=T.APP_BG)
         self.state = state
+        self._navigate = navigate or (lambda key: None)
         self._fig_bar = None
         self._fig_donut = None
         self._fig_perfil = None
+        self._df_history = None
         self._build()
         self.refresh()
 
@@ -62,11 +64,19 @@ class DashboardView(ctk.CTkFrame):
         title_col.pack(side="left", fill="x", expand=True)
         SectionTitle(title_col, text="Dashboard",
                      text_color=T.TEXT).pack(anchor="w")
+        sub_row = ctk.CTkFrame(title_col, fg_color="transparent")
+        sub_row.pack(anchor="w", fill="x")
         self.subtitulo = ctk.CTkLabel(
-            title_col, text="Resumen general del proyecto",
+            sub_row, text="Resumen general del proyecto",
             font=T.FONT_BODY, text_color=T.TEXT_MUTED, anchor="w",
         )
-        self.subtitulo.pack(anchor="w")
+        self.subtitulo.pack(side="left")
+        self.fecha_ref_badge = ctk.CTkLabel(
+            sub_row, text="",
+            font=T.FONT_SMALL, text_color=T.TEXT_ON_DARK,
+            fg_color=T.PRIMARY, corner_radius=6,
+            padx=8, pady=2,
+        )
 
         # Botón Actualizar
         ctk.CTkButton(
@@ -114,7 +124,8 @@ class DashboardView(ctk.CTkFrame):
 
         # Vuelos y Modelos
         self.card_vuelos = Card(row, title="Vuelos y Modelos",
-                                action_text="+ Nuevo vuelo", light=True)
+                                action_text="+ Nuevo vuelo", light=True,
+                                action_cmd=lambda: self._navigate("diario"))
         self.card_vuelos.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         self.vuelos_holder = ctk.CTkFrame(self.card_vuelos,
                                           fg_color="transparent")
@@ -131,6 +142,7 @@ class DashboardView(ctk.CTkFrame):
         ctk.CTkSegmentedButton(
             tabs, values=["Diario", "Semanal", "Mensual"],
             variable=self._bar_period,
+            command=self._on_bar_period_change,
             font=T.FONT_SMALL,
             fg_color=T.HOVER_BG, selected_color=T.CARD_BG,
             selected_hover_color=T.CARD_BG, unselected_color=T.HOVER_BG,
@@ -163,6 +175,7 @@ class DashboardView(ctk.CTkFrame):
         self.c_eq = Card(
             row, title="Equipos y Rendimiento (Hoy)",
             action_text="→ Ver detalle",
+            action_cmd=lambda: self._navigate("equipos"),
             light=True,
         )
         self.c_eq.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
@@ -178,6 +191,7 @@ class DashboardView(ctk.CTkFrame):
             c_fr, text="Ver todos los frentes",
             fg_color="transparent", text_color=T.PRIMARY,
             hover_color=T.HOVER_BG, font=T.FONT_SMALL,
+            command=lambda: self._navigate("dron"),
         ).pack(pady=(0, 12))
 
     # ═══════════════════════════════════════════════════════════════════
@@ -186,6 +200,7 @@ class DashboardView(ctk.CTkFrame):
     def refresh(self):
         cfg = self.state.load_config() or {}
         df = self._load_history_safe()
+        self._df_history = df
 
         nombre = cfg.get("nombre", "Resumen general del proyecto")
         tramo = cfg.get("tramo", "")
@@ -210,47 +225,98 @@ class DashboardView(ctk.CTkFrame):
                     area_str = f"{area_ha:.1f} ha"
 
         if df.empty:
-            self.kpi_ter.set_value("—")
-            self.kpi_exc.set_value("—")
-            self.kpi_avg.set_value("—", delta_suffix="vs semana pasada")
+            # Fallback: usar frentes_resultado TOTAL si existe (sección Volúmenes)
+            resultados, fecha_res, _ = self.state.load_frentes_resultado()
+            self._update_fecha_badge(fecha_res)
+            total_row = next(
+                (r for r in resultados if r.get("nombre") == "TOTAL"), None)
+            if total_row:
+                c = float(total_row.get("corte_m3", 0))
+                r = float(total_row.get("relleno_m3", 0))
+                self.kpi_ter.set_value(f"{r:,.0f} m³",
+                                       delta_suffix="Volúmenes · frentes")
+                self.kpi_exc.set_value(f"{c:,.0f} m³",
+                                       delta_suffix="Volúmenes · frentes")
+                obj_total = self._objetivo_total(cfg)
+                if obj_total:
+                    pct = (c + r) / obj_total * 100
+                    self.kpi_avg.set_value(f"{pct:.1f}%",
+                                           delta_suffix="vs objetivo total")
+                else:
+                    self.kpi_avg.set_value("—", delta_suffix="configure objetivo")
+                self._render_donut(c, r, c - r)
+            else:
+                self.kpi_ter.set_value("—")
+                self.kpi_exc.set_value("—")
+                self.kpi_avg.set_value("—", delta_suffix="vs semana pasada")
+                self._render_donut(0, 0, 0)
             self._render_flights_empty()
             self._render_bar_chart_empty()
-            self._render_donut(0, 0, 0)
-            self._render_perfil_chart()
-
+            self._render_perfil_chart(fecha_ref=None)
             self._render_equipos_real()
-            self._render_frentes()
+            self._render_frentes(fecha_ref=None)
             return
 
-        # Datos reales del registro
+        # ── Fecha de referencia: último vuelo procesado ──────────────────
         ult = df.iloc[-1]
-        corte = float(ult.get("vol_corte_dia", 0))
-        relleno = float(ult.get("vol_relleno_dia", 0))
-        neto = corte - relleno
+        fecha_ref = ult["fecha"]  # Timestamp del último vuelo
+        self._update_fecha_badge(fecha_ref.strftime("%Y-%m-%d") if fecha_ref else None)
 
-        self.kpi_ter.set_value(f"{relleno:,.0f} m³",
-                               self._delta(df, "vol_relleno_dia"))
-        self.kpi_exc.set_value(f"{corte:,.0f} m³",
-                               self._delta(df, "vol_corte_dia"),
-                               delta_up=False)
-        obj = cfg.get("vol_corte_objetivo", 0) or 0
-        if obj:
-            pct = float(ult.get("vol_corte_acum", 0)) / obj * 100
-            self.kpi_avg.set_value(f"{pct:.1f}%", "↑ —",
-                                    delta_suffix="vs semana pasada")
+        corte_acum   = float(ult.get("vol_corte_acum",   0))
+        relleno_acum = float(ult.get("vol_relleno_acum", 0))
+
+        # Si las columnas acum no existen, caer a valores diarios
+        if corte_acum == 0 and relleno_acum == 0:
+            corte_acum   = float(ult.get("vol_corte_dia",   0))
+            relleno_acum = float(ult.get("vol_relleno_dia", 0))
+
+        neto_acum = corte_acum - relleno_acum
+
+        self.kpi_ter.set_value(
+            f"{relleno_acum:,.0f} m³",
+            self._delta(df, "vol_relleno_acum") or self._delta(df, "vol_relleno_dia"),
+            delta_suffix="acum. · vs vuelo anterior",
+        )
+        self.kpi_exc.set_value(
+            f"{corte_acum:,.0f} m³",
+            self._delta(df, "vol_corte_acum") or self._delta(df, "vol_corte_dia"),
+            delta_up=False,
+            delta_suffix="acum. · vs vuelo anterior",
+        )
+
+        obj_total = self._objetivo_total(cfg)
+        if obj_total:
+            ejecutado = corte_acum + relleno_acum
+            pct = ejecutado / obj_total * 100
+            self.kpi_avg.set_value(f"{pct:.1f}%",
+                                   self._delta_semanal(df),
+                                   delta_suffix="vs semana pasada")
         else:
-            self.kpi_avg.set_value("—",
-                                    delta_suffix="vs semana pasada")
+            self.kpi_avg.set_value("—", delta_suffix="configure objetivo")
 
         self._render_flights(df)
-        self._render_bar_chart(df)
-        self._render_donut(corte, relleno, neto)
-        self._render_perfil_chart()
+        self._refresh_bar_chart(df)
+        self._render_donut(corte_acum, relleno_acum, neto_acum)
+        self._render_perfil_chart(fecha_ref=fecha_ref)
 
         self._render_equipos_real()
-        self._render_frentes()
+        self._render_frentes(fecha_ref=fecha_ref)
 
     # ── Helpers ─────────────────────────────────────────────────────────
+    def _update_fecha_badge(self, fecha_str: str | None):
+        """Muestra u oculta el badge de fecha de referencia en el header."""
+        if fecha_str:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(str(fecha_str))
+                label = f"✈ Acumulado al {dt.strftime('%d/%m/%Y')}"
+            except Exception:
+                label = f"✈ Acumulado al {fecha_str}"
+            self.fecha_ref_badge.configure(text=label)
+            self.fecha_ref_badge.pack(side="left", padx=(10, 0))
+        else:
+            self.fecha_ref_badge.pack_forget()
+
     def _load_history_safe(self):
         """Devuelve el registro si existe; DataFrame vacío en caso contrario."""
         try:
@@ -264,37 +330,125 @@ class DashboardView(ctk.CTkFrame):
             return ""
         prev = float(df.iloc[-2][col]) or 1e-9
         curr = float(df.iloc[-1][col])
-        return f"↑ {(curr - prev) / prev * 100:+.1f}%"
+        chg = (curr - prev) / prev * 100
+        arrow = "↑" if chg >= 0 else "↓"
+        return f"{arrow} {abs(chg):.1f}%"
+
+    def _delta_semanal(self, df) -> str:
+        """Variación semanal de vol_corte_acum para el KPI de Avance."""
+        from datetime import timedelta
+        if "vol_corte_acum" not in df.columns or len(df) < 2:
+            return ""
+        latest = df.iloc[-1]["fecha"]
+        semana_atras = latest - timedelta(days=7)
+        prev_rows = df[df["fecha"] <= semana_atras]
+        if prev_rows.empty:
+            return ""
+        prev_val = float(prev_rows.iloc[-1]["vol_corte_acum"]) or 1e-9
+        curr_val = float(df.iloc[-1]["vol_corte_acum"])
+        chg = (curr_val - prev_val) / prev_val * 100
+        arrow = "↑" if chg >= 0 else "↓"
+        return f"{arrow} {abs(chg):.1f}%"
+
+    def _objetivo_total(self, cfg: dict) -> float:
+        """Volumen total objetivo = corte_obj + relleno_obj.
+
+        Prioridad:
+        1. proyecto_config.json  (seteado al validar volumen objetivo)
+        2. Suma del perfil_objetivo (si el pipeline ya generó el perfil)
+        """
+        obj_c = float(cfg.get("vol_corte_objetivo",   0) or 0)
+        obj_r = float(cfg.get("vol_relleno_objetivo", 0) or 0)
+        if obj_c + obj_r > 0:
+            return obj_c + obj_r
+        # Fallback: sumar corte + relleno del perfil objetivo
+        try:
+            perfil = self.state.load_perfil_objetivo()
+            if perfil:
+                return sum(
+                    float(p.get("corte_m3", 0)) + float(p.get("relleno_m3", 0))
+                    for p in perfil
+                )
+        except Exception:
+            pass
+        return 0.0
 
     def _render_flights_empty(self):
         for w in self.vuelos_holder.winfo_children():
             w.destroy()
-        ctk.CTkLabel(
-            self.vuelos_holder,
-            text="Sin vuelos procesados",
-            font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
-        ).pack(anchor="w", pady=14)
+        n_disp = len(self.state.vuelos_disponibles())
+        if n_disp > 0:
+            ctk.CTkLabel(
+                self.vuelos_holder,
+                text=f"✈ {n_disp} DEM(s) cargados — sin procesar aún",
+                font=T.FONT_SMALL, text_color=T.WARNING,
+            ).pack(anchor="w", pady=(8, 4))
+            ctk.CTkLabel(
+                self.vuelos_holder,
+                text="Ir a «Vuelos y modelos DEM» para procesar",
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+            ).pack(anchor="w")
+        else:
+            ctk.CTkLabel(
+                self.vuelos_holder,
+                text="Sin vuelos procesados",
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+            ).pack(anchor="w", pady=14)
 
     def _render_flights(self, df):
         for w in self.vuelos_holder.winfo_children():
             w.destroy()
+
+        # ── Estadísticas de vuelos (sección Vuelos y modelos DEM) ────────
+        n_disp = len(self.state.vuelos_disponibles())
+        n_proc = len(self.state.vuelos_procesados())
+        n_pend = max(n_disp - n_proc, 0)
+
+        stats = ctk.CTkFrame(self.vuelos_holder, fg_color="transparent")
+        stats.pack(fill="x", pady=(2, 8))
+        for txt, clr in [
+            (f"✈ {n_disp} vuelos", T.TEXT),
+            (f"   ✓ {n_proc} procesados", T.SUCCESS),
+            (f"   ○ {n_pend} pendientes",
+             T.WARNING if n_pend > 0 else T.TEXT_FAINT),
+        ]:
+            ctk.CTkLabel(stats, text=txt,
+                         font=T.FONT_SMALL, text_color=clr).pack(side="left")
+
         table = DataTable(
             self.vuelos_holder,
-            columns=["Fecha", "Vuelo", "Corte día", "Estado"],
-            widths=[110, 60, 100, 90],
+            columns=["Fecha", "Vuelo", "Corte acum.", "Estado"],
+            widths=[110, 60, 110, 90],
         )
         table.pack(fill="x")
         for _, r in df.tail(5).iloc[::-1].iterrows():
             fecha = r["fecha"].strftime("%d %b, %Y")
             vuelo = f"#{int(r.get('vuelo_num', 0))}"
-            corte = f"{r.get('vol_corte_dia', 0):,.0f} m³"
+            corte = f"{r.get('vol_corte_acum', r.get('vol_corte_dia', 0)):,.0f} m³"
             badge = StatusBadge(table, "Procesado", kind="ok")
             table.add_row([f"✈ {fecha}", vuelo, corte, badge])
         ctk.CTkButton(
             self.vuelos_holder, text="Ver todos los vuelos",
             fg_color="transparent", text_color=T.PRIMARY,
             hover_color=T.HOVER_BG, font=T.FONT_SMALL,
+            command=lambda: self._navigate("diario"),
         ).pack(pady=(8, 0))
+
+    def _on_bar_period_change(self, value):
+        df = getattr(self, "_df_history", None)
+        if df is None or df.empty:
+            self._render_bar_chart_empty()
+        else:
+            self._refresh_bar_chart(df)
+
+    def _refresh_bar_chart(self, df):
+        period = self._bar_period.get()
+        if period == "Semanal":
+            self._render_bar_chart_weekly(df)
+        elif period == "Mensual":
+            self._render_bar_chart_monthly(df)
+        else:
+            self._render_bar_chart_daily(df)
 
     def _render_bar_chart_empty(self):
         self._clear_canvas("bar")
@@ -305,10 +459,50 @@ class DashboardView(ctk.CTkFrame):
         ).pack(anchor="center", pady=30)
 
     def _render_bar_chart(self, df):
+        self._render_bar_chart_daily(df)
+
+    def _render_bar_chart_daily(self, df):
         df = df.tail(7)
         labels = [f.strftime("%d %b") for f in df["fecha"]]
         exc = df["vol_corte_dia"].tolist() if "vol_corte_dia" in df else [0]*len(df)
         ter = df["vol_relleno_dia"].tolist() if "vol_relleno_dia" in df else [0]*len(df)
+        self._draw_bar_chart(labels, exc, ter)
+
+    def _render_bar_chart_weekly(self, df):
+        import pandas as pd
+        df = df.copy()
+        if "semana" not in df.columns:
+            df["semana"] = df["fecha"].dt.strftime("%Y-W%W")
+        grouped = (
+            df.groupby("semana", sort=True)
+            .agg(
+                vol_corte_dia=("vol_corte_dia", "sum"),
+                vol_relleno_dia=("vol_relleno_dia", "sum"),
+            )
+            .reset_index()
+            .tail(8)
+        )
+        labels = grouped["semana"].tolist()
+        exc = grouped["vol_corte_dia"].tolist()
+        ter = grouped["vol_relleno_dia"].tolist()
+        self._draw_bar_chart(labels, exc, ter)
+
+    def _render_bar_chart_monthly(self, df):
+        import pandas as pd
+        df = df.copy()
+        if "mes" not in df.columns:
+            df["mes"] = df["fecha"].dt.strftime("%Y-%m")
+        grouped = (
+            df.groupby("mes", sort=True)
+            .agg(
+                vol_corte_dia=("vol_corte_dia", "sum"),
+                vol_relleno_dia=("vol_relleno_dia", "sum"),
+            )
+            .reset_index()
+        )
+        labels = grouped["mes"].tolist()
+        exc = grouped["vol_corte_dia"].tolist()
+        ter = grouped["vol_relleno_dia"].tolist()
         self._draw_bar_chart(labels, exc, ter)
 
     def _draw_bar_chart(self, labels, exc, ter):
@@ -391,7 +585,7 @@ class DashboardView(ctk.CTkFrame):
             ctk.CTkLabel(r, text=txt, font=T.FONT_SMALL,
                          text_color=T.TEXT_MUTED).pack(side="right")
 
-    def _render_perfil_chart(self):
+    def _render_perfil_chart(self, fecha_ref=None):
         # Limpia el contenedor
         if self._fig_perfil is not None:
             try:
@@ -412,6 +606,26 @@ class DashboardView(ctk.CTkFrame):
                 font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
             ).pack(anchor="center", pady=30)
             return
+
+        # Advertencia si el perfil de avance no corresponde al último vuelo
+        if fecha_ref is not None and fecha_av:
+            try:
+                import pandas as pd
+                from datetime import datetime
+                fecha_ref_str = pd.Timestamp(fecha_ref).strftime("%Y-%m-%d")
+                dt_av = datetime.fromisoformat(str(fecha_av))
+                fecha_av_str = dt_av.strftime("%Y-%m-%d")
+                if fecha_av_str != fecha_ref_str:
+                    ctk.CTkLabel(
+                        self.perfil_holder,
+                        text=(f"⚠  El perfil de avance corresponde al {dt_av.strftime('%d/%m/%Y')} "
+                              f"— el último vuelo es del {pd.Timestamp(fecha_ref).strftime('%d/%m/%Y')}. "
+                              "Recalcule en «Vuelos y modelos DEM»."),
+                        font=T.FONT_SMALL, text_color=T.WARNING,
+                        anchor="w", wraplength=900,
+                    ).pack(anchor="w", padx=4, pady=(0, 4))
+            except Exception:
+                pass
 
         abs_obj = [p["abs"] for p in perfil_obj]
         corte_obj  = [-p["corte_m3"]  for p in perfil_obj]
@@ -478,10 +692,10 @@ class DashboardView(ctk.CTkFrame):
             w.destroy()
 
     # ── Volumen por frente (datos reales) ───────────────────────────────
-    def _render_frentes(self):
+    def _render_frentes(self, fecha_ref=None):
         for w in self.fr_box.winfo_children():
             w.destroy()
-        resultados, _fecha_res, _modo_res = self.state.load_frentes_resultado()
+        resultados, fecha_res, _modo_res = self.state.load_frentes_resultado()
         total_row = next((r for r in resultados if r.get("nombre") == "TOTAL"), None)
         datos = [r for r in resultados if r.get("nombre") != "TOTAL"]
         if not datos:
@@ -493,6 +707,36 @@ class DashboardView(ctk.CTkFrame):
                 font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
             ).pack(anchor="w", pady=10)
             return
+
+        # Mostrar la fecha de los resultados de frentes
+        if fecha_res:
+            try:
+                from datetime import datetime
+                dt_res = datetime.fromisoformat(str(fecha_res))
+                fecha_res_str = dt_res.strftime("%d/%m/%Y")
+            except Exception:
+                fecha_res_str = str(fecha_res)
+            ctk.CTkLabel(
+                self.fr_box, text=f"Vuelo: {fecha_res_str}",
+                font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+            ).pack(anchor="w", pady=(0, 4))
+
+            # Advertencia si la fecha de frentes no coincide con el último vuelo
+            if fecha_ref is not None:
+                try:
+                    import pandas as pd
+                    fecha_ref_str = pd.Timestamp(fecha_ref).strftime("%Y-%m-%d")
+                    fecha_res_norm = dt_res.strftime("%Y-%m-%d")
+                    if fecha_res_norm != fecha_ref_str:
+                        ctk.CTkLabel(
+                            self.fr_box,
+                            text=f"⚠ Desact. respecto al último vuelo ({fecha_ref_str})",
+                            font=T.FONT_SMALL, text_color=T.WARNING,
+                            wraplength=160,
+                        ).pack(anchor="w", pady=(0, 4))
+                except Exception:
+                    pass
+
         # Denominador: corte total del proyecto (fila TOTAL si existe)
         total_corte = float(total_row.get("corte_m3", 0)) if total_row else sum(
             float(r.get("corte_m3", 0)) for r in datos

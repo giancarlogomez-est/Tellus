@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from tkinter import messagebox
 
@@ -15,6 +16,7 @@ from . import theme as T
 from .state import ProjectState
 from .widgets import SectionTitle, Card
 from .runner import ProcessDialog
+from .pdf_utils import generar_pdf_desde_xlsx
 
 
 _FECHA_DIA = re.compile(r"reporte_(\d{4}-\d{2}-\d{2})\.xlsx$")
@@ -91,6 +93,12 @@ class ReportesView(ctk.CTkFrame):
             hover_color=T.HOVER_BG)
         self.btn_carpeta.pack(side="left", padx=(8, 0))
 
+        self.btn_pdf = ctk.CTkButton(
+            bar, text="⬇  Exportar PDF", state="disabled",
+            command=self._exportar_pdf,
+            fg_color=T.SUCCESS, hover_color=T.SUCCESS_HOV)
+        self.btn_pdf.pack(side="left", padx=(8, 0))
+
         self.btn_regen = ctk.CTkButton(
             bar, text="↺  Regenerar", state="disabled",
             command=self._regenerar_reporte,
@@ -163,6 +171,7 @@ class ReportesView(ctk.CTkFrame):
         self.btn_abrir.configure(state="normal")
         self.btn_carpeta.configure(state="normal")
         self.btn_del.configure(state="normal")
+        self.btn_pdf.configure(state="normal")
 
         # Regenerar solo disponible si hay datos en el registro
         fecha, semanal, mensual = self._datos_regenerar(path)
@@ -226,7 +235,7 @@ class ReportesView(ctk.CTkFrame):
             self._seleccion = None
             self._tipo_sel  = None
             for btn in (self.btn_abrir, self.btn_carpeta,
-                        self.btn_regen, self.btn_del):
+                        self.btn_pdf, self.btn_regen, self.btn_del):
                 btn.configure(state="disabled")
             for w in self.preview_holder.winfo_children():
                 w.destroy()
@@ -335,6 +344,59 @@ class ReportesView(ctk.CTkFrame):
             popen_factory=lambda: self.state.run_pipeline(fecha, semanal, mensual),
             on_done=_on_done,
         )
+
+    # ── Exportar PDF ──────────────────────────────────────────────────────────
+
+    def _exportar_pdf(self):
+        if not self._seleccion:
+            return
+
+        # Localizar heatmap asociado si existe
+        heatmap: Path | None = None
+        m = _FECHA_DIA.search(self._seleccion.name)
+        if m:
+            heatmap = self.state.heatmap_para_fecha(m.group(1))
+        else:
+            m2 = _MES.search(self._seleccion.name)
+            if m2:
+                candidate = self._seleccion.parent / f"heatmap_{m2.group(1)}.png"
+                if candidate.exists():
+                    heatmap = candidate
+
+        pdf_path = self._seleccion.with_suffix(".pdf")
+
+        self.btn_pdf.configure(state="disabled", text="Generando…")
+
+        def _generar():
+            try:
+                generar_pdf_desde_xlsx(self._seleccion, heatmap)
+                self.after(0, lambda: self._pdf_listo(pdf_path, ok=True))
+            except Exception as exc:
+                self.after(0, lambda e=exc: self._pdf_listo(pdf_path, ok=False, error=e))
+
+        threading.Thread(target=_generar, daemon=True).start()
+
+    def _pdf_listo(self, pdf_path: Path, ok: bool, error: Exception | None = None):
+        self.btn_pdf.configure(state="normal", text="⬇  Exportar PDF")
+        if not ok:
+            messagebox.showerror(
+                "Error al generar PDF",
+                f"No se pudo crear el PDF:\n{error}",
+                parent=self.winfo_toplevel())
+            return
+        if messagebox.askyesno(
+                "PDF generado",
+                f"PDF creado exitosamente:\n{pdf_path.name}\n\n¿Abrirlo ahora?",
+                parent=self.winfo_toplevel()):
+            try:
+                if sys.platform.startswith("win"):
+                    os.startfile(str(pdf_path))  # type: ignore[attr-defined]
+                elif sys.platform == "darwin":
+                    subprocess.Popen(["open", str(pdf_path)])
+                else:
+                    subprocess.Popen(["xdg-open", str(pdf_path)])
+            except Exception as e:
+                print(e)
 
     # ── Acciones de archivo ───────────────────────────────────────────────────
 

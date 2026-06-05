@@ -283,6 +283,44 @@ class ProjectState:
             json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
+    def load_volumen_frente_dia(
+        self, fecha_str: str, abs_ini: float, abs_fin: float
+    ) -> tuple[float, float]:
+        """Retorna (corte_m3, relleno_m3) del frente [abs_ini–abs_fin] para esa fecha.
+        Lee registro_secciones.csv y convierte progresivas 'Kx+yyy' a metros."""
+        if not self.registro_sec_path.exists():
+            return 0.0, 0.0
+        try:
+            df = pd.read_csv(self.registro_sec_path)
+            if df.empty or "progresiva" not in df.columns:
+                return 0.0, 0.0
+            df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+            target = pd.to_datetime(fecha_str, errors="coerce")
+            if pd.isna(target):
+                return 0.0, 0.0
+            df = df[df["fecha"].dt.date == target.date()]
+            if df.empty:
+                return 0.0, 0.0
+
+            def _prog_m(p: str) -> float:
+                s = str(p).strip().upper().lstrip("K")
+                km, m = s.split("+") if "+" in s else (s, "0")
+                try:
+                    return float(km) * 1000 + float(m)
+                except ValueError:
+                    return -1.0
+
+            df = df.copy()
+            df["abs_m"] = df["progresiva"].apply(_prog_m)
+            sub = df[(df["abs_m"] >= abs_ini) & (df["abs_m"] <= abs_fin)]
+            corte = (float(sub["vol_corte_dia"].sum())
+                     if "vol_corte_dia" in sub.columns else 0.0)
+            relleno = (float(sub["vol_relleno_dia"].sum())
+                       if "vol_relleno_dia" in sub.columns else 0.0)
+            return corte, relleno
+        except Exception:
+            return 0.0, 0.0
+
     def load_registros_equipos(self) -> pd.DataFrame:
         if not self.registros_equipos_path.exists():
             return pd.DataFrame()
@@ -290,6 +328,7 @@ class ProjectState:
         if df.empty:
             return df
         df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+        df = df.dropna(subset=["fecha"])
         return df.sort_values("fecha").reset_index(drop=True)
 
     def save_registro_equipo(self, registro: dict) -> None:

@@ -1,8 +1,10 @@
 """Aplicación principal con sidebar y router de vistas."""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 import customtkinter as ctk
+from PIL import Image
 
 from . import theme as T
 from .state import ProjectState
@@ -52,15 +54,28 @@ class App(ctk.CTk):
         side.grid(row=0, column=0, sticky="nsew")
         side.grid_propagate(False)
 
-        # Branding
-        brand = ctk.CTkLabel(side, text="TELLUS",
-                              font=(T.FONT_FAMILY, 18, "bold"),
-                              text_color=T.TEXT, anchor="w")
-        brand.pack(fill="x", padx=22, pady=(22, 0))
+        # Branding — logo + nombre
+        logo_path = (
+            Path(sys._MEIPASS) / "ui" / "logoTELLUS.png"
+            if getattr(sys, "frozen", False)
+            else Path(__file__).parent / "logoTELLUS.png"
+        )
+        brand_frame = ctk.CTkFrame(side, fg_color="transparent")
+        brand_frame.pack(fill="x", padx=14, pady=(18, 0))
+        if logo_path.exists():
+            pil_img = Image.open(logo_path)
+            ctk_logo = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(42, 28))
+            ctk.CTkLabel(brand_frame, image=ctk_logo, text="  TELLUS",
+                         compound="left", font=(T.FONT_FAMILY, 18, "bold"),
+                         text_color=T.TEXT, anchor="w").pack(fill="x")
+        else:
+            ctk.CTkLabel(brand_frame, text="TELLUS",
+                         font=(T.FONT_FAMILY, 18, "bold"),
+                         text_color=T.TEXT, anchor="w").pack(fill="x")
         sub = ctk.CTkLabel(side, text="Avance de obras viales",
                             font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
                             anchor="w")
-        sub.pack(fill="x", padx=22, pady=(0, 26))
+        sub.pack(fill="x", padx=22, pady=(2, 26))
 
         self._nav_btns: dict[str, ctk.CTkButton] = {}
         for key, label, icon in NAV:
@@ -85,9 +100,6 @@ class App(ctk.CTk):
             button_hover_color=T.INPUT_HOVER, text_color=T.TEXT,
             dropdown_fg_color=T.CARD_BG, dropdown_text_color=T.TEXT,
         ).pack(fill="x", pady=(0, 6))
-        ctk.CTkLabel(footer, text=f"v1.0  ·  {self.state_.base.name}",
-                      font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
-                      anchor="w").pack(fill="x")
 
     def _build_main(self):
         self.main = ctk.CTkFrame(self, fg_color=T.MAIN_BG)
@@ -114,7 +126,7 @@ class App(ctk.CTk):
 
     def _construir_vista(self, key: str) -> ctk.CTkFrame:
         if key == "dashboard":
-            return DashboardView(self.main, self.state_)
+            return DashboardView(self.main, self.state_, navigate=self.show)
         if key == "diario":
             return DiarioView(self.main, self.state_,
                               on_processed=self._refresh_all)

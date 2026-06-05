@@ -150,13 +150,17 @@ SEC_COLS = ["fecha","progresiva","vol_corte_dia","vol_relleno_dia",
 def cargar_registro(base):
     p = base / "registro.csv"
     if p.exists():
-        return pd.read_csv(p, parse_dates=["fecha"])
+        df = pd.read_csv(p)
+        df["fecha"] = pd.to_datetime(df["fecha"], format="mixed", dayfirst=False)
+        return df
     return pd.DataFrame(columns=REG_COLS)
 
 def cargar_registro_secciones(base):
     p = base / "registro_secciones.csv"
     if p.exists():
-        return pd.read_csv(p, parse_dates=["fecha"])
+        df = pd.read_csv(p)
+        df["fecha"] = pd.to_datetime(df["fecha"], format="mixed", dayfirst=False)
+        return df
     return pd.DataFrame(columns=SEC_COLS)
 
 def guardar_registro(base, df):
@@ -826,6 +830,9 @@ def procesar_dia(cfg, fecha):
     tot_r_dia  = df_dia["vol_relleno"].sum()
     tot_c_acum = df_acum["vol_corte_acum"].sum()
     tot_r_acum = df_acum["vol_relleno_acum"].sum()
+
+    # Eliminar entrada existente para esta fecha (re-procesamiento sin duplicados)
+    reg = reg[reg["fecha"] != fecha_ts].reset_index(drop=True)
     vuelo_num  = len(reg) + 1
 
     print(f"  Corte hoy:    {tot_c_dia:>10,.2f} m³  |  Acum: {tot_c_acum:>10,.2f} m³")
@@ -849,6 +856,9 @@ def procesar_dia(cfg, fecha):
 
     # Registro de secciones
     reg_sec = cargar_registro_secciones(base)
+    # Eliminar secciones existentes para esta fecha antes de agregar las nuevas
+    if not reg_sec.empty and "fecha" in reg_sec.columns:
+        reg_sec = reg_sec[reg_sec["fecha"] != fecha_ts].reset_index(drop=True)
     df_sec_new = df_dia.rename(columns={"vol_corte":"vol_corte_dia",
                                          "vol_relleno":"vol_relleno_dia"})
     df_sec_new = df_sec_new.merge(df_acum, on="progresiva")
@@ -879,10 +889,8 @@ def procesar_semanal(cfg, reg, fecha_ref):
     base = cfg["_base"]
     reg = reg.copy()
     reg["fecha"] = pd.to_datetime(reg["fecha"], format='mixed')
-    if fecha_ref.weekday() == 0:
-        semana_str = (fecha_ref - timedelta(days=1)).strftime("%Y-W%W")
-    else:
-        semana_str = fecha_ref.strftime("%Y-W%W")
+    # Siempre usa la semana de fecha_ref (aunque no esté completa)
+    semana_str = fecha_ref.strftime("%Y-W%W")
 
     semana_df = reg[reg["semana"] == semana_str].sort_values("fecha")
     if semana_df.empty:
@@ -900,10 +908,8 @@ def procesar_mensual(cfg, reg, fecha_ref):
     base = cfg["_base"]
     reg = reg.copy()
     reg["fecha"] = pd.to_datetime(reg["fecha"], format='mixed')
-    if fecha_ref.day == 1:
-        mes_str = (fecha_ref - timedelta(days=1)).strftime("%Y-%m")
-    else:
-        mes_str = fecha_ref.strftime("%Y-%m")
+    # Siempre usa el mes de fecha_ref (aunque no esté completo)
+    mes_str = fecha_ref.strftime("%Y-%m")
 
     mes_df = reg[reg["mes"] == mes_str].sort_values("fecha")
     if mes_df.empty:
@@ -980,13 +986,11 @@ if __name__ == "__main__":
 
     reg = procesar_dia(cfg, fecha)
 
-    if fecha.weekday() == 0 or args.semanal:
-        print("\n  Generando reporte semanal …")
-        procesar_semanal(cfg, reg, fecha)
+    print("\n  Generando reporte semanal …")
+    procesar_semanal(cfg, reg, fecha)
 
-    if fecha.day == 1 or args.mensual:
-        print("\n  Generando reporte mensual …")
-        procesar_mensual(cfg, reg, fecha)
+    print("\n  Generando reporte mensual …")
+    procesar_mensual(cfg, reg, fecha)
 
     print("\n" + "=" * 62)
     print("  Listo.")
