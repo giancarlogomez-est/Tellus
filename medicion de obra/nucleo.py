@@ -27,6 +27,118 @@ class EntradaInvalida(Exception):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SISTEMA DE COORDENADAS DEL PROYECTO
+# ══════════════════════════════════════════════════════════════════════════════
+# El valor de `epsg_proyecto` en la configuración puede ser:
+#   9377 | "9377" | "EPSG:9377" | "ESRI:102233" | una definición WKT o PROJ.
+def normalizar_crs(valor):
+    """Devuelve la forma canónica para guardar en la configuración
+    ('EPSG:9377' → 9377; 'esri:102233' → 'ESRI:102233'; WKT/PROJ tal cual)."""
+    if valor is None:
+        return None
+    if isinstance(valor, (int, float)):
+        return int(valor)
+    s = str(valor).strip()
+    if not s:
+        return None
+    if s.isdigit():
+        return int(s)
+    aut, sep, cod = s.partition(":")
+    if sep and aut.strip().isalpha() and cod.strip().isdigit():
+        aut = aut.strip().upper()
+        return int(cod) if aut == "EPSG" else f"{aut}:{cod.strip()}"
+    return s
+
+
+def etiqueta_crs(valor) -> str:
+    """Texto corto para mostrar: 'EPSG:9377', 'ESRI:102233' o 'personalizado'."""
+    v = normalizar_crs(valor)
+    if v is None:
+        return ""
+    if isinstance(v, int):
+        return f"EPSG:{v}"
+    return v if len(v) <= 24 else "personalizado"
+
+
+def resolver_crs(valor):
+    """Convierte el valor de configuración en un CRS de rasterio (o None si
+    está vacío). Lanza EntradaInvalida si no se reconoce."""
+    from rasterio.crs import CRS
+    v = normalizar_crs(valor)
+    if v is None:
+        return None
+    try:
+        return CRS.from_epsg(v) if isinstance(v, int) else CRS.from_user_input(v)
+    except Exception:
+        raise EntradaInvalida(
+            f"Sistema de coordenadas no reconocido: «{etiqueta_crs(v) or v}». "
+            "Usa un código como EPSG:9377 o ESRI:102233, o detecta el sistema "
+            "desde un GeoTIFF en Configuración.") from None
+
+
+def describir_crs(valor) -> dict:
+    """Valida un sistema de coordenadas y lo describe para la interfaz.
+    Devuelve: ok, valor (canónico), etiqueta, nombre, proyectado, unidad, mensaje."""
+    v = normalizar_crs(valor)
+    info = {"ok": False, "valor": v, "etiqueta": etiqueta_crs(v), "nombre": "",
+            "proyectado": False, "unidad": "", "mensaje": ""}
+    if v is None:
+        info["mensaje"] = "Indica un sistema de coordenadas."
+        return info
+    try:
+        crs = resolver_crs(v)
+    except EntradaInvalida as e:
+        info["mensaje"] = str(e)
+        return info
+    try:
+        from pyproj import CRS as PCRS
+        info["nombre"] = PCRS.from_user_input(crs.to_wkt()).name
+    except Exception:
+        info["nombre"] = info["etiqueta"]
+    info["proyectado"] = bool(crs.is_projected)
+    if not crs.is_projected:
+        info["mensaje"] = (f"{info['nombre']} está en grados (geográfico). Para medir "
+                           "volúmenes se necesita un sistema proyectado en metros.")
+        return info
+    info["unidad"] = str(crs.linear_units or "")
+    if info["unidad"].lower() not in ("metre", "meter", "m"):
+        info["mensaje"] = (f"{info['nombre']} usa «{info['unidad']}» como unidad; "
+                           "los volúmenes se calculan en metros.")
+        return info
+    info.update(ok=True, mensaje=f"{info['nombre']} — proyectado, en metros.")
+    return info
+
+
+def crs_de_archivo(path):
+    """Sistema de coordenadas de un ráster, en la forma que se guarda en la
+    configuración (código de autoridad si lo tiene; si no, su WKT).
+    Devuelve None si el archivo no trae sistema de coordenadas."""
+    import rasterio
+    try:
+        with rasterio.open(str(path)) as src:
+            crs = src.crs
+    except Exception as e:
+        raise EntradaInvalida(f"No se pudo abrir el archivo como ráster: {e}") from None
+    if crs is None:
+        return None
+    aut = crs.to_authority()
+    if aut:
+        return normalizar_crs(f"{aut[0]}:{aut[1]}")
+    return crs.to_wkt()
+
+
+def _mismo_crs(a, b) -> bool:
+    if a is None or b is None:
+        return True
+    try:
+        if a == b:
+            return True
+        return a.to_authority() is not None and a.to_authority() == b.to_authority()
+    except Exception:
+        return False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # VALIDACIÓN DE RÁSTERS DE ENTRADA
 # ══════════════════════════════════════════════════════════════════════════════
 def inspeccionar_raster(path) -> dict:
@@ -72,7 +184,7 @@ def inspeccionar_raster(path) -> dict:
 
         if src.crs is None:
             info["avisos"].append(
-                "El archivo no trae sistema de coordenadas; se asumirá el EPSG del proyecto.")
+                "El archivo no trae sistema de coordenadas; se asumirá el del proyecto.")
         elif src.crs.is_geographic:
             info.update(tipo="elevacion", mensaje=(
                 "El modelo está en coordenadas geográficas (grados). Pídelo en un "
@@ -119,22 +231,25 @@ def _eje_en_crs(eje, bounds_raster, crs_raster, epsg_proyecto):
     caja = box(*bounds_raster)
     if eje.intersects(caja):
         return eje
-    if epsg_proyecto and crs_raster is not None:
+    crs_proy = resolver_crs(epsg_proyecto)
+    if crs_proy is not None and crs_raster is not None:
         try:
             from pyproj import Transformer
             from shapely.ops import transform as shp_transform
-            tr = Transformer.from_crs(int(epsg_proyecto), crs_raster.to_wkt(),
+            tr = Transformer.from_crs(crs_proy.to_wkt(), crs_raster.to_wkt(),
                                       always_xy=True)
             eje2 = shp_transform(tr.transform, eje)
             if eje2.intersects(caja):
-                print(f"  Eje reproyectado de EPSG:{epsg_proyecto} al sistema del DEM.")
+                print(f"  Eje reproyectado de {etiqueta_crs(epsg_proyecto)} "
+                      "al sistema del DEM.")
                 return eje2
         except Exception:
             pass
     raise EntradaInvalida(
         "El eje de la vía no cae sobre el DEM de referencia. Revisa que el eje y "
-        "el DEM estén en el mismo sistema de coordenadas (EPSG del proyecto en "
-        "Configuración).")
+        "el DEM estén en el mismo sistema de coordenadas (el eje debe estar en el "
+        f"sistema del proyecto, hoy {etiqueta_crs(epsg_proyecto) or 'sin definir'}; "
+        "se cambia en Configuración).")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -180,9 +295,14 @@ def construir_corredor(eje, dem_ref_path, ancho: float, prog_inicio: float = 0.0
     import shapely
 
     with rasterio.open(str(dem_ref_path)) as src:
-        crs = src.crs or (CRS.from_epsg(int(epsg_proyecto)) if epsg_proyecto else None)
+        crs_proy = resolver_crs(epsg_proyecto)
+        crs = src.crs or crs_proy
         res_nativa = abs(src.transform.a)
         bounds = tuple(src.bounds)
+    if src.crs is not None and not _mismo_crs(src.crs, crs_proy):
+        print(f"  [!] El DEM de referencia está en {src.crs.to_string()[:40]} y el "
+              f"proyecto en {etiqueta_crs(epsg_proyecto)}: se calcula en el sistema "
+              "del DEM. Si no es lo esperado, corrige el sistema en Configuración.")
 
     eje = _eje_en_crs(eje, bounds, crs, epsg_proyecto)
 
@@ -227,7 +347,7 @@ def leer_en_corredor(path, cor: Corredor, epsg_defecto: int | None = None) -> np
 
     arr = np.full(cor.shape, np.nan, dtype="float32")
     with rasterio.open(str(path)) as src:
-        src_crs = src.crs or cor.crs or (CRS.from_epsg(int(epsg_defecto)) if epsg_defecto else None)
+        src_crs = src.crs or cor.crs or resolver_crs(epsg_defecto)
         metodo = (Resampling.average if cor.res > 1.5 * abs(src.transform.a)
                   else Resampling.bilinear)
         reproject(source=rasterio.band(src, 1), destination=arr,

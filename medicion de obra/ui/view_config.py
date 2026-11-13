@@ -9,18 +9,28 @@ from .state import ProjectState
 from .widgets import SectionTitle, Card, Pill
 
 
+SEP = " — "
 EPSG_PRESETS = [
-    ("9377",  "MAGNA-SIRGAS / Origen-Nacional (Colombia, recomendado)"),
-    ("3116",  "MAGNA-SIRGAS / Bogotá zone"),
-    ("3117",  "MAGNA-SIRGAS / East zone"),
-    ("3114",  "MAGNA-SIRGAS / Far West zone"),
-    ("3115",  "MAGNA-SIRGAS / West zone"),
-    ("3118",  "MAGNA-SIRGAS / East of East zone"),
-    ("32617", "WGS 84 / UTM 17N"),
-    ("32618", "WGS 84 / UTM 18N"),
-    ("32619", "WGS 84 / UTM 19N"),
-    ("4326",  "WGS 84 geográfico (lat/lon)"),
+    ("EPSG:9377",   "MAGNA-SIRGAS 2018 / Origen Nacional (Colombia)"),
+    ("ESRI:102233", "MAGNA Ciudad Bogotá (cartesiano local de Bogotá)"),
+    ("EPSG:6247",   "MAGNA-SIRGAS / Bogotá urban grid"),
+    ("EPSG:3116",   "MAGNA-SIRGAS / Colombia Bogotá zone"),
+    ("EPSG:3117",   "MAGNA-SIRGAS / Colombia East Central zone"),
+    ("EPSG:3115",   "MAGNA-SIRGAS / Colombia West zone"),
+    ("EPSG:3114",   "MAGNA-SIRGAS / Colombia Far West zone"),
+    ("EPSG:3118",   "MAGNA-SIRGAS / Colombia East zone"),
+    ("EPSG:32617",  "WGS 84 / UTM 17N"),
+    ("EPSG:32618",  "WGS 84 / UTM 18N"),
+    ("EPSG:32619",  "WGS 84 / UTM 19N"),
 ]
+
+
+def _nucleo(state):
+    import sys
+    if str(state.base) not in sys.path:
+        sys.path.insert(0, str(state.base))
+    import nucleo
+    return nucleo
 
 
 def _row(parent, etiqueta: str, hint: str = "") -> ctk.CTkFrame:
@@ -84,18 +94,50 @@ class ConfigView(ctk.CTkFrame):
                     "cambios menores no suman volumen", numeric=True)
 
         # ── Proyección ──────────────────────────────────────────────────
-        card = Card(scroll, title="Sistema de proyección")
+        card = Card(scroll, title="Sistema de coordenadas")
         card.pack(fill="x", pady=(0, 14))
         cont = ctk.CTkFrame(card, fg_color="transparent")
         cont.pack(fill="x", padx=18, pady=(0, 14))
 
-        fr = _row(cont, "Código EPSG", "")
+        fr = _row(cont, "Sistema del proyecto",
+                  "Elige uno de la lista o escribe un código: EPSG:9377, ESRI:102233, 3116 …")
         self._vars["epsg_proyecto"] = ctk.StringVar()
-        opciones = [f"{e} — {desc}" for e, desc in EPSG_PRESETS]
+        opciones = [f"{e}{SEP}{desc}" for e, desc in EPSG_PRESETS]
         combo = ctk.CTkComboBox(
-            fr, values=opciones, width=380,
-            variable=self._vars["epsg_proyecto"])
+            fr, values=opciones, width=440,
+            variable=self._vars["epsg_proyecto"],
+            command=lambda _=None: self._verificar_crs())
         combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        combo.bind("<Return>", lambda _e: self._verificar_crs())
+        combo.bind("<FocusOut>", lambda _e: self._verificar_crs())
+
+        fr = _row(cont, "", "")
+        ctk.CTkButton(fr, text="Verificar", width=110, height=30,
+                       fg_color="transparent", border_width=1,
+                       border_color=T.PRIMARY, text_color=T.PRIMARY,
+                       hover_color=T.HOVER_BG,
+                       command=self._verificar_crs
+                       ).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ctk.CTkButton(fr, text="Detectar desde un GeoTIFF…", width=210, height=30,
+                       fg_color="transparent", border_width=1,
+                       border_color=T.PRIMARY, text_color=T.PRIMARY,
+                       hover_color=T.HOVER_BG,
+                       command=self._detectar_crs
+                       ).grid(row=0, column=2, sticky="w", padx=(8, 0))
+        self._btn_crs_base = ctk.CTkButton(
+            fr, text="Usar el del DEM de referencia", width=220, height=30,
+            fg_color="transparent", border_width=1,
+            border_color=T.PRIMARY, text_color=T.PRIMARY,
+            hover_color=T.HOVER_BG,
+            command=lambda: self._detectar_crs(
+                self.state.baseline_dir / "dem_baseline.tif"))
+        self._btn_crs_base.grid(row=0, column=3, sticky="w", padx=(8, 0))
+
+        self._crs_valor = None          # definición completa cuando no hay código
+        self._crs_estado = ctk.CTkLabel(
+            cont, text="", font=T.FONT_SMALL, text_color=T.TEXT_MUTED,
+            anchor="w", justify="left", wraplength=760)
+        self._crs_estado.pack(fill="x", padx=(228, 0), pady=(2, 0))
 
         # ── Volúmenes objetivo ──────────────────────────────────────────
         card = Card(scroll, title="Volúmenes objetivo y factores")
@@ -143,6 +185,74 @@ class ConfigView(ctk.CTkFrame):
         if numeric:
             entry.configure(justify="right")
 
+    # ── Sistema de coordenadas ──────────────────────────────────────────
+    def _texto_crs(self, valor) -> str:
+        """Texto del desplegable para un valor guardado en la configuración."""
+        nucleo = _nucleo(self.state)
+        et = nucleo.etiqueta_crs(valor)
+        if not et:
+            return ""
+        desc = next((d for e, d in EPSG_PRESETS if e == et), None)
+        if desc is None:
+            desc = nucleo.describir_crs(valor)["nombre"]
+        return f"{et}{SEP}{desc}" if desc and desc != et else et
+
+    def _valor_crs(self):
+        """Valor a guardar según lo que hay escrito en el desplegable."""
+        txt = self._vars["epsg_proyecto"].get().strip()
+        if txt.startswith("personalizado") and self._crs_valor:
+            return self._crs_valor
+        self._crs_valor = None
+        return _nucleo(self.state).normalizar_crs(txt.split(SEP)[0].strip())
+
+    def _verificar_crs(self, avisar_dem: bool = True) -> dict:
+        nucleo = _nucleo(self.state)
+        info = nucleo.describir_crs(self._valor_crs())
+        texto = ("✓ " if info["ok"] else "✗ ") + info["mensaje"]
+        color = T.SUCCESS if info["ok"] else T.DANGER
+        if info["ok"]:
+            self._vars["epsg_proyecto"].set(self._texto_crs(info["valor"]))
+            dem = self.state.baseline_dir / "dem_baseline.tif"
+            if avisar_dem and dem.exists():
+                try:
+                    del_dem = nucleo.crs_de_archivo(dem)
+                except nucleo.EntradaInvalida:
+                    del_dem = None
+                if del_dem is not None and not nucleo._mismo_crs(
+                        nucleo.resolver_crs(del_dem), nucleo.resolver_crs(info["valor"])):
+                    texto += (f"\n⚠ El DEM de referencia está en "
+                              f"{nucleo.etiqueta_crs(del_dem)}: no coincide con el "
+                              "sistema elegido. El cálculo se hace en el sistema del "
+                              "DEM y el eje se reproyecta desde el sistema elegido.")
+                    color = T.DANGER
+        self._crs_estado.configure(text=texto, text_color=color)
+        return info
+
+    def _detectar_crs(self, path=None):
+        if path is None:
+            from tkinter import filedialog
+            path = filedialog.askopenfilename(
+                title="GeoTIFF del que leer el sistema de coordenadas",
+                filetypes=[("GeoTIFF (ortofoto o modelo de elevación)", "*.tif *.tiff"),
+                           ("Todos los archivos", "*.*")])
+            if not path:
+                return
+        nucleo = _nucleo(self.state)
+        try:
+            valor = nucleo.crs_de_archivo(path)
+        except nucleo.EntradaInvalida as e:
+            messagebox.showerror("No se pudo leer", str(e))
+            return
+        if valor is None:
+            messagebox.showwarning(
+                "Sin sistema de coordenadas",
+                "El archivo no trae sistema de coordenadas. Elígelo de la lista "
+                "o escribe su código.")
+            return
+        self._crs_valor = valor
+        self._vars["epsg_proyecto"].set(self._texto_crs(valor))
+        self._verificar_crs()
+
     # ── Datos ───────────────────────────────────────────────────────────
     def refresh(self):
         cfg = self.state.load_config() or {
@@ -164,11 +274,14 @@ class ConfigView(ctk.CTkFrame):
         for k, v in self._vars.items():
             val = cfg.get(k, {"resolucion_trabajo": 0.5, "umbral_dz": 0.05}.get(k, ""))
             if k == "epsg_proyecto":
-                etiqueta = next((f"{e} — {d}" for e, d in EPSG_PRESETS
-                                  if e == str(val)), str(val))
-                v.set(etiqueta)
+                self._crs_valor = val if isinstance(val, str) else None
+                v.set(self._texto_crs(val))
             else:
                 v.set("" if val in (None, "") else str(val))
+        self._btn_crs_base.configure(
+            state="normal" if (self.state.baseline_dir / "dem_baseline.tif").exists()
+            else "disabled")
+        self._verificar_crs()
 
         # Estado de archivos baseline
         for w in self.baseline_holder.winfo_children():
@@ -219,8 +332,10 @@ class ConfigView(ctk.CTkFrame):
             cfg["paso_muestreo_landxml"] = int(float(
                 self._vars["paso_muestreo_landxml"].get() or 4))
 
-            epsg_str = self._vars["epsg_proyecto"].get().split(" ")[0]
-            cfg["epsg_proyecto"] = int(epsg_str)
+            info_crs = self._verificar_crs()
+            if not info_crs["ok"]:
+                raise ValueError("Sistema de coordenadas: " + info_crs["mensaje"])
+            cfg["epsg_proyecto"] = info_crs["valor"]
 
             # Asegurar defaults si vienen vacíos
             cfg.setdefault("dem_baseline", "baseline/dem_baseline.tif")

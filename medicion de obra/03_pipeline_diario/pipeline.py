@@ -557,7 +557,7 @@ def escribir_landxml(superficies, tf, paso, ruta, crs_epsg=None):
              '  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
              '  <Units><Metric areaUnit="squareMeter" linearUnit="meter" volumeUnit="cubicMeter"/></Units>']
     if crs_epsg:
-        lines.append(f'  <!-- EPSG:{crs_epsg} | Resolución malla: {res:.2f} m -->')
+        lines.append(f'  <!-- {crs_epsg} | Resolución malla: {res:.2f} m -->')
     lines.append('  <Surfaces>')
 
     for nombre, desc, arr in superficies:
@@ -784,7 +784,8 @@ def procesar_mensual(cfg, reg, fecha_ref):
         [("Baseline",       f"DEM inicial — {cfg['nombre']}", arr_base),
          (f"Fin_{mes_str}", f"DSM fin de mes {mes_str}",      arr_fin)],
         cor.transform, cfg["paso_muestreo_landxml"], ruta_xml,
-        cor.crs.to_epsg() if cor.crs else None)
+        (":".join(cor.crs.to_authority()) if cor.crs and cor.crs.to_authority()
+         else nucleo.etiqueta_crs(cfg.get("epsg_proyecto")) or None))
     print(f"  → {ruta_xml}")
 
 
