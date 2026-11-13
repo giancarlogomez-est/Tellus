@@ -60,11 +60,23 @@ class ProjectState:
         if not (self.baseline_dir / "dem_baseline.tif").exists():
             falt.append("dem_baseline.tif")
         if not any((self.baseline_dir / f"eje_via.{ext}").exists()
-                   for ext in ("dxf", "dwg", "geojson")):
-            falt.append("eje_via.(dxf|dwg|geojson)")
-        if not (self.baseline_dir / "dem_final.tif").exists():
-            falt.append("dem_final.tif")
+                   for ext in ("dxf", "geojson", "shp")):
+            falt.append("eje_via.(dxf|geojson)")
+        # dem_final.tif (superficie de diseño) solo lo necesita el cálculo
+        # por frentes; el seguimiento de vuelos no depende de él.
         return (not falt), falt
+
+    # ── Validación de modelos de elevación ───────────────────────────────
+    def validar_elevacion(self, src_path: str) -> dict:
+        """Comprueba que el archivo sea un modelo de elevación utilizable.
+        Lanza ValueError con un mensaje claro si es una ortofoto, un .ecw, etc."""
+        if str(self.base) not in sys.path:
+            sys.path.insert(0, str(self.base))
+        import nucleo
+        info = nucleo.inspeccionar_raster(src_path)
+        if not info["ok"]:
+            raise ValueError(info["mensaje"])
+        return info
 
     # ── Registro de vuelos ───────────────────────────────────────────────
     def load_registro(self) -> pd.DataFrame:
@@ -179,8 +191,9 @@ class ProjectState:
         )
 
     def import_dem(self, src_path: str, fecha: str) -> None:
-        """Copia un .tif como vuelos/<fecha>/dsm.tif."""
+        """Valida y copia un modelo de elevación como vuelos/<fecha>/dsm.tif."""
         import shutil
+        self.validar_elevacion(src_path)
         dest_dir = self.vuelos_dir / fecha
         dest_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_path, dest_dir / "dsm.tif")

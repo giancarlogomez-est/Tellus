@@ -262,7 +262,7 @@ class UploadCard(tk.Frame):
         )
         # Número + nombre
         prefix = f"{number}. " if number else ""
-        self._canvas.create_text(
+        self._it_titulo = self._canvas.create_text(
             _UPLOAD_CARD_W // 2, 122,
             text=f"{prefix}{label}",
             font=("Segoe UI", 11, "bold"),
@@ -270,13 +270,13 @@ class UploadCard(tk.Frame):
             width=_UPLOAD_CARD_W - 24, tags="click",
         )
         # Formato / extensión
-        self._canvas.create_text(
+        self._it_fmt = self._canvas.create_text(
             _UPLOAD_CARD_W // 2, 144,
             text=fmt, font=("Segoe UI", 8),
             fill=T.mc(T.TEXT_MUTED), tags="click",
         )
         # Chip de archivo (fondo + texto)
-        self._canvas.create_rectangle(
+        self._it_chip_bg = self._canvas.create_rectangle(
             14, _UPLOAD_CARD_H - 34, _UPLOAD_CARD_W - 14, _UPLOAD_CARD_H - 14,
             fill=T.mc(T.HOVER_BG), outline="", tags="click",
         )
@@ -299,6 +299,15 @@ class UploadCard(tk.Frame):
             text=self._fmt_name(p),
             fill=T.mc(T.SUCCESS if p else T.TEXT_MUTED),
         )
+
+    def refresh_theme(self):
+        """Reaplica los colores del tema activo (claro/oscuro) a la tarjeta."""
+        bg = T.mc(T.CARD_BG)
+        self.configure(bg=bg)
+        self._canvas.configure(bg=bg)
+        self._canvas.itemconfigure(self._it_titulo, fill=T.mc(T.TEXT))
+        self._canvas.itemconfigure(self._it_fmt, fill=T.mc(T.TEXT_MUTED))
+        self._canvas.itemconfigure(self._it_chip_bg, fill=T.mc(T.HOVER_BG))
 
     # ── Helpers ──────────────────────────────────────────────────────────
     def _draw_border(self, loaded: bool):

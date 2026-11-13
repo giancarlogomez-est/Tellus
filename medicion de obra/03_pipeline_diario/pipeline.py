@@ -25,12 +25,7 @@ from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
-import geopandas as gpd
-import ezdxf
 import rasterio
-from rasterio.warp import reproject, Resampling
-from rasterio.mask import mask as rio_mask
-from shapely.geometry import LineString, Polygon, mapping
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -45,6 +40,8 @@ from openpyxl.drawing.image import Image as XLImage
 warnings.filterwarnings("ignore")
 # BASE apunta a la raíz del proyecto (carpeta padre de 03_pipeline_diario)
 BASE = Path(__file__).parent.parent
+sys.path.insert(0, str(BASE))
+import nucleo  # noqa: E402  (núcleo de cálculo compartido)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HELPERS EXCEL
@@ -115,199 +112,58 @@ REG_COLS = ["fecha","vuelo_num","vol_corte_dia","vol_relleno_dia","balance_dia",
 SEC_COLS = ["fecha","progresiva","vol_corte_dia","vol_relleno_dia",
             "vol_corte_acum","vol_relleno_acum"]
 
-def cargar_registro(base):
-    p = base / "registro.csv"
+def _leer_csv(p, cols):
     if p.exists():
-        return pd.read_csv(p, parse_dates=["fecha"])
-    return pd.DataFrame(columns=REG_COLS)
+        df = pd.read_csv(p)
+        if not df.empty:
+            df["fecha"] = pd.to_datetime(df["fecha"], format="mixed",
+                                         errors="coerce").dt.normalize()
+            return df.dropna(subset=["fecha"]).reset_index(drop=True)
+    return pd.DataFrame(columns=cols)
+
+def _guardar_csv(p, df):
+    df = df.copy()
+    df["fecha"] = pd.to_datetime(df["fecha"]).dt.strftime("%Y-%m-%d")
+    df.to_csv(p, index=False)
+
+def _agregar(df, nuevas):
+    """Concatena sin arrastrar un DataFrame vacío (evita columnas object)."""
+    return nuevas.copy() if df.empty else pd.concat([df, nuevas], ignore_index=True)
+
+def cargar_registro(base):
+    return _leer_csv(base / "registro.csv", REG_COLS)
 
 def cargar_registro_secciones(base):
-    p = base / "registro_secciones.csv"
-    if p.exists():
-        return pd.read_csv(p, parse_dates=["fecha"])
-    return pd.DataFrame(columns=SEC_COLS)
+    return _leer_csv(base / "registro_secciones.csv", SEC_COLS)
 
 def guardar_registro(base, df):
-    df.to_csv(base / "registro.csv", index=False, date_format="%Y-%m-%d")
+    _guardar_csv(base / "registro.csv", df)
 
 def guardar_registro_secciones(base, df):
-    df.to_csv(base / "registro_secciones.csv", index=False, date_format="%Y-%m-%d")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# FUNCIONES DE CÁLCULO RASTER
-# ══════════════════════════════════════════════════════════════════════════════
-def cargar_dem(path, nodata=-9999.0):
-    with rasterio.open(path) as src:
-        arr = src.read(1).astype("float64")
-        arr[arr == (src.nodata if src.nodata else nodata)] = np.nan
-        return arr, src.transform, src.crs, src.meta.copy()
-
-def alinear_dem(path, ref_tf, ref_crs, ref_shape, nodata=-9999.0):
-    arr = np.full(ref_shape, np.nan, dtype="float64")
-    with rasterio.open(path) as src:
-        reproject(source=rasterio.band(src, 1), destination=arr,
-                  src_transform=src.transform, src_crs=src.crs,
-                  dst_transform=ref_tf, dst_crs=ref_crs,
-                  resampling=Resampling.bilinear,
-                  src_nodata=src.nodata or nodata, dst_nodata=np.nan)
-    return arr
-
-def cargar_eje_dxf(path, crs_target=None):
-    """
-    Carga el eje de la vía desde un archivo DXF.
-
-    Entidades soportadas: LINE, LWPOLYLINE, POLYLINE, SPLINE, ARC.
-    Si el DXF tiene varias entidades, las une en una sola LineString
-    ordenándolas por conectividad (extremo más cercano).
-
-    Parámetros
-    ----------
-    path       : str | Path — ruta al archivo .dxf
-    crs_target : rasterio.crs.CRS — CRS del raster de referencia.
-                 Si el DXF tiene $INSUNITS en metros se asume que
-                 sus coordenadas ya están en ese CRS.
-
-    Retorna
-    -------
-    shapely.geometry.LineString
-    """
-    from shapely.geometry import LineString, MultiLineString
-    from shapely.ops import linemerge, unary_union
-    import math
-
-    doc = ezdxf.readfile(str(path))
-    msp = doc.modelspace()
-
-    segmentos = []
-
-    for ent in msp:
-        tipo = ent.dxftype()
-
-        if tipo == "LINE":
-            p1 = (ent.dxf.start.x, ent.dxf.start.y)
-            p2 = (ent.dxf.end.x,   ent.dxf.end.y)
-            segmentos.append(LineString([p1, p2]))
-
-        elif tipo == "LWPOLYLINE":
-            pts = [(p[0], p[1]) for p in ent.get_points()]
-            if len(pts) >= 2:
-                segmentos.append(LineString(pts))
-
-        elif tipo == "POLYLINE":
-            pts = [(v.dxf.location.x, v.dxf.location.y)
-                   for v in ent.vertices]
-            if len(pts) >= 2:
-                segmentos.append(LineString(pts))
-
-        elif tipo == "SPLINE":
-            try:
-                pts = [(p.x, p.y) for p in ent.flattening(0.01)]
-            except Exception:
-                pts = [(p[0], p[1]) for p in ent.control_points]
-            if len(pts) >= 2:
-                segmentos.append(LineString(pts))
-
-        elif tipo == "ARC":
-            cx, cy = ent.dxf.center.x, ent.dxf.center.y
-            r      = ent.dxf.radius
-            a_ini  = math.radians(ent.dxf.start_angle)
-            a_fin  = math.radians(ent.dxf.end_angle)
-            if a_fin < a_ini:
-                a_fin += 2 * math.pi
-            n_pts = max(32, int((a_fin - a_ini) / math.radians(2)))
-            angles = np.linspace(a_ini, a_fin, n_pts)
-            pts = [(cx + r*math.cos(a), cy + r*math.sin(a)) for a in angles]
-            segmentos.append(LineString(pts))
-
-    if not segmentos:
-        raise ValueError(
-            f"No se encontraron entidades LINE/LWPOLYLINE/POLYLINE/SPLINE/ARC "
-            f"en '{path}'. Verifica que el eje esté en el modelspace."
-        )
-
-    if len(segmentos) == 1:
-        linea = segmentos[0]
-    else:
-        merged = linemerge(unary_union(segmentos))
-        if merged.geom_type == "MultiLineString":
-            linea = max(merged.geoms, key=lambda g: g.length)
-            print(f"  [!] DXF contiene {len(segmentos)} segmentos discontinuos — "
-                  f"se usó el más largo ({linea.length:.1f} m). "
-                  f"Verifica que el eje sea una polilínea continua.")
-        else:
-            linea = merged
-
-    print(f"  Eje DXF cargado: {linea.length:.1f} m  "
-          f"({len(segmentos)} entidad(es) leída(s))")
-    return linea
-
-
-def crear_secciones(linea, espaciado, ancho, prog_ini):
-    secs, hw = [], ancho
-    dists = np.arange(0, linea.length, espaciado)
-    for d in dists:
-        d2 = min(d + espaciado, linea.length)
-        p1 = linea.interpolate(d); p2 = linea.interpolate(d2)
-        dx, dy = p2.x-p1.x, p2.y-p1.y
-        mag = np.hypot(dx, dy)
-        if mag < 1e-6: continue
-        nx, ny = -dy/mag, dx/mag
-        poly = Polygon([(p1.x+nx*hw, p1.y+ny*hw), (p2.x+nx*hw, p2.y+ny*hw),
-                        (p2.x-nx*hw, p2.y-ny*hw), (p1.x-nx*hw, p1.y-ny*hw)])
-        dm = prog_ini + d
-        secs.append({"progresiva": f"K{int(dm//1000)}+{int(dm%1000):03d}",
-                     "dist": round(d, 1), "polygon": poly})
-    return secs
-
-def calcular_volumenes(dz_arr, tf, secciones, pixel_area, dz_raster_path):
-    rows = []
-    with rasterio.open(dz_raster_path) as src:
-        for s in secciones:
-            try:
-                m, _ = rio_mask(src, [mapping(s["polygon"])],
-                                crop=True, nodata=-9999.0, all_touched=True)
-                a = m[0].astype("float64"); a[a == -9999.0] = np.nan
-                v = a[np.isfinite(a)]
-                vc = float(abs(v[v < 0].sum()) * pixel_area)
-                vr = float(v[v >= 0].sum() * pixel_area)
-            except Exception:
-                vc = vr = 0.0
-            rows.append({"progresiva": s["progresiva"], "vol_corte": round(vc, 3),
-                         "vol_relleno": round(vr, 3)})
-    return pd.DataFrame(rows)
-
-def guardar_dz_raster(dz_arr, meta, path):
-    m = meta.copy(); m.update(dtype="float32", nodata=-9999.0)
-    arr = np.where(np.isfinite(dz_arr), dz_arr, -9999.0).astype("float32")
-    with rasterio.open(path, "w", **m) as dst:
-        dst.write(arr, 1)
+    _guardar_csv(base / "registro_secciones.csv", df)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HEATMAP
 # ══════════════════════════════════════════════════════════════════════════════
-def generar_heatmap(dz_arr, tf, secciones, eje, titulo, ruta_png,
-                    dz_min=-3.0, dz_max=3.0):
+def generar_heatmap(dz_arr, cor, titulo, ruta_png, dz_min=-3.0, dz_max=3.0):
+    """Mapa de ΔZ del corredor. rojo = corte · verde = relleno."""
     bounds = rasterio.transform.array_bounds(
-        dz_arr.shape[0], dz_arr.shape[1], tf)
+        dz_arr.shape[0], dz_arr.shape[1], cor.transform)
     extent = [bounds[0], bounds[2], bounds[1], bounds[3]]
+    paso = max(1, int(max(dz_arr.shape) / 4000))      # decimar para dibujar
+    arr = np.ma.masked_invalid(dz_arr[::paso, ::paso])
 
-    fig, ax = plt.subplots(figsize=(13, 4.5))
-    # RdYlGn: rojo (dz<0, corte) → amarillo (0) → verde (dz>0, relleno)
+    ancho_m, alto_m = bounds[2] - bounds[0], bounds[3] - bounds[1]
+    alto_fig = float(np.clip(13 * alto_m / max(ancho_m, 1e-6), 3.5, 10))
+    fig, ax = plt.subplots(figsize=(13, alto_fig))
     cmap = plt.get_cmap("RdYlGn")
     norm = mcolors.TwoSlopeNorm(vmin=dz_min, vcenter=0, vmax=dz_max)
-    ax.imshow(dz_arr, extent=extent, cmap=cmap, norm=norm,
-              origin="upper", aspect="auto")
+    ax.imshow(arr, extent=extent, cmap=cmap, norm=norm,
+              origin="upper", aspect="equal")
 
-    # Eje de la vía
-    ex, ey = eje.xy
+    ex, ey = cor.eje.xy
     ax.plot(ex, ey, "k-", lw=1.2, label="Eje vía")
-
-    # Polígonos de secciones
-    for s in secciones:
-        xs, ys = s["polygon"].exterior.xy
-        ax.plot(xs, ys, "k-", lw=0.4, alpha=0.5)
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
@@ -319,15 +175,14 @@ def generar_heatmap(dz_arr, tf, secciones, eje, titulo, ruta_png,
     ax.legend(fontsize=8, loc="upper right")
     ax.tick_params(labelsize=7)
     fig.tight_layout()
-    plt.savefig(ruta_png, dpi=130, bbox_inches="tight")
+    fig.savefig(ruta_png, dpi=130, bbox_inches="tight")
     plt.close(fig)
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # REPORTE DIARIO
 # ══════════════════════════════════════════════════════════════════════════════
 def reporte_diario(cfg, fecha, vuelo_num, df_sec_dia, df_sec_acum,
-                   reg, heatmap_path, ruta_xlsx):
+                   reg, heatmap_path, ruta_xlsx, desde="referencia"):
     wb = Workbook()
     nom = cfg["nombre"]; F2 = "#,##0.00"
 
@@ -347,14 +202,14 @@ def reporte_diario(cfg, fecha, vuelo_num, df_sec_dia, df_sec_acum,
     ws.column_dimensions["B"].width = 16
     ws.column_dimensions["C"].width = 10
 
-    title_row(ws, 1, 3, f"Informe Diario de Avance — {fecha.strftime('%d/%m/%Y')}")
+    title_row(ws, 1, 3, f"Informe de Avance — vuelo del {fecha.strftime('%d/%m/%Y')}")
     ws.cell(row=2, column=1, value=f"Proyecto: {nom}").font = fn(False, "444444", 9)
     ws.cell(row=2, column=2, value=f"Vuelo N° {vuelo_num}").font = fn(True, "000000", 9)
     ws.cell(row=2, column=2).alignment = al(h="right")
     ws.cell(row=2, column=3, value=fecha.strftime("Sem. %W/%Y")).font = fn(False, "666666", 9)
     ws.row_dimensions[2].height = 16
 
-    ws.cell(row=4, column=1, value="PRODUCCIÓN DEL DÍA").fill = fl("1F2937")
+    ws.cell(row=4, column=1, value=f"PRODUCCIÓN DEL PERIODO (desde {desde})").fill = fl("1F2937")
     ws.cell(row=4, column=1).font = fn(True, "FFFFFF", 9)
     ws.cell(row=4, column=1).alignment = al(h="left")
     for c in [2, 3]: ws.cell(row=4, column=c).fill = fl("1F2937")
@@ -386,7 +241,7 @@ def reporte_diario(cfg, fecha, vuelo_num, df_sec_dia, df_sec_acum,
     # ── Hoja 2: Secciones ─────────────────────────────────────────────────
     ws2 = wb.create_sheet("Secciones")
     ws2.sheet_view.showGridLines = False
-    cols = ["Progresiva", "Corte hoy (m³)", "Relleno hoy (m³)", "Balance hoy (m³)",
+    cols = ["Progresiva", "Corte periodo (m³)", "Relleno periodo (m³)", "Balance periodo (m³)",
             "Corte acum. (m³)", "Relleno acum. (m³)", "Balance acum. (m³)"]
     anchos = [12, 15, 16, 15, 15, 16, 16]
     for i, w in enumerate(anchos, 1):
@@ -587,7 +442,8 @@ def escribir_landxml(superficies, tf, paso, ruta, crs_epsg=None):
             for c in ci:
                 z = float(arr[r, c])
                 if np.isnan(z): continue
-                e, n = rasterio.transform.xy(tf, r, c)
+                e = tf.c + (c + 0.5) * tf.a
+                n = tf.f + (r + 0.5) * tf.e
                 id_map[(r,c)] = pid
                 plines.append(f'          <P id="{pid}">{n:.4f} {e:.4f} {z:.4f}</P>')
                 pid += 1
@@ -615,62 +471,71 @@ def escribir_landxml(superficies, tf, paso, ruta, crs_epsg=None):
 # ══════════════════════════════════════════════════════════════════════════════
 # PIPELINE PRINCIPAL
 # ══════════════════════════════════════════════════════════════════════════════
+def _dsm_de(base, fecha):
+    return base / "vuelos" / fecha.isoformat() / "dsm.tif"
+
+
 def procesar_dia(cfg, fecha):
     base    = cfg["_base"]
-    dsm_hoy = base / "vuelos" / fecha.isoformat() / "dsm.tif"
+    dsm_hoy = _dsm_de(base, fecha)
     if not dsm_hoy.exists():
-        sys.exit(f"[ERROR] No se encontró el DSM de hoy: {dsm_hoy}")
-
-    baseline_path = ruta(cfg, "dem_baseline")
-    eje_path      = ruta(cfg, "eje_via")
-    if not baseline_path.exists():
-        sys.exit(f"[ERROR] No se encontró baseline: {baseline_path}")
+        sys.exit(f"[ERROR] No se encontró el modelo del vuelo: {dsm_hoy}")
 
     print(f"\n  Procesando vuelo: {fecha.isoformat()}")
+    nucleo.exigir_elevacion(dsm_hoy, "El modelo del vuelo")
 
-    # Cargar baseline
-    arr_base, tf_ref, crs_ref, meta_ref = cargar_dem(str(baseline_path))
-    pixel_area = abs(tf_ref.a * tf_ref.e)
-    nrows, ncols = arr_base.shape
+    epsg   = cfg.get("epsg_proyecto")
+    cor    = nucleo.corredor_del_proyecto(base, cfg)
+    umbral = float(cfg.get("umbral_dz", 0.05) or 0)
+    print(f"  Malla de trabajo: {cor.shape[1]}×{cor.shape[0]} px a {cor.res:.2f} m  "
+          f"|  corredor {cor.eje.length:,.0f} m × {2*cor.ancho:.0f} m  "
+          f"|  umbral de ruido ±{umbral:.2f} m")
 
-    # Cargar DSM de hoy (reproyectado a grilla baseline)
-    arr_hoy = alinear_dem(str(dsm_hoy), tf_ref, crs_ref, (nrows, ncols))
+    arr_base = nucleo.leer_en_corredor(ruta(cfg, "dem_baseline"), cor, epsg)
+    arr_hoy  = nucleo.leer_en_corredor(dsm_hoy, cor, epsg)
 
-    # ΔZ vs baseline → acumulado
+    cob_base = nucleo.cobertura(arr_base, cor)
+    cob_hoy  = nucleo.cobertura(arr_hoy, cor)
+    print(f"  Cobertura del corredor: referencia {cob_base:.0f}%  |  vuelo {cob_hoy:.0f}%")
+    if cob_hoy < 1 or cob_base < 1:
+        raise nucleo.EntradaInvalida(
+            "El modelo no se superpone con el corredor. Revisa que el vuelo, el DEM "
+            "de referencia y el eje estén en el mismo sistema de coordenadas.")
+    if cob_hoy < 95:
+        print("  [!] El vuelo no cubre todo el corredor: las zonas sin dato no suman "
+              "volumen (el acumulado puede quedar subestimado).")
+
     dz_acum = arr_hoy - arr_base
 
-    # ΔZ vs ayer → producción del día
+    # Vuelo anterior = el de fecha más reciente ANTERIOR a este (no el último procesado)
+    ts  = pd.Timestamp(fecha)
     reg = cargar_registro(base)
-    reg_sorted = reg.sort_values("fecha")
-    dsm_ayer = None
-    if not reg_sorted.empty:
-        ayer = reg_sorted.iloc[-1]
-        dsm_ayer_path = base / "vuelos" / pd.Timestamp(ayer["fecha"]).strftime("%Y-%m-%d") / "dsm.tif"
-        if dsm_ayer_path.exists():
-            dsm_ayer = alinear_dem(str(dsm_ayer_path), tf_ref, crs_ref, (nrows, ncols))
+    if (reg["fecha"] == ts).any():
+        print("  [i] Este vuelo ya estaba procesado: se reemplazan sus resultados.")
+    reg = reg[reg["fecha"] != ts]
 
-    dz_dia = (arr_hoy - dsm_ayer) if dsm_ayer is not None else dz_acum
+    arr_prev, fecha_prev = None, None
+    for f in sorted(reg.loc[reg["fecha"] < ts, "fecha"], reverse=True):
+        p = _dsm_de(base, f.date())
+        if p.exists():
+            arr_prev, fecha_prev = nucleo.leer_en_corredor(p, cor, epsg), f.date()
+            break
+        print(f"  [!] Falta el modelo del vuelo {f.date()} — se busca uno anterior.")
+    if (reg["fecha"] > ts).any():
+        print("  [!] Hay vuelos posteriores ya procesados: vuelve a procesar el "
+              "siguiente para que su producción del periodo quede bien.")
 
-    # Guardar rasters de diferencia
-    tmp_acum = str(base / "vuelos" / fecha.isoformat() / "dz_acum.tif")
-    tmp_dia  = str(base / "vuelos" / fecha.isoformat() / "dz_dia.tif")
-    guardar_dz_raster(dz_acum, meta_ref, tmp_acum)
-    guardar_dz_raster(dz_dia,  meta_ref, tmp_dia)
+    dz_dia = (arr_hoy - arr_prev) if arr_prev is not None else dz_acum
+    desde  = fecha_prev.strftime("%d/%m/%Y") if fecha_prev else "referencia"
 
-    # Eje y secciones — soporta GeoJSON, Shapefile y DXF
-    if str(eje_path).endswith((".geojson", ".shp")):
-        gdf = gpd.read_file(str(eje_path))
-        if gdf.crs and gdf.crs != crs_ref: gdf = gdf.to_crs(crs_ref)
-        eje = gdf.geometry.iloc[0]
-    else:
-        eje = cargar_eje_dxf(str(eje_path), crs_ref)
+    dir_vuelo = base / "vuelos" / fecha.isoformat()
+    nucleo.guardar_raster(dz_acum, cor, dir_vuelo / "dz_acum.tif")
+    nucleo.guardar_raster(dz_dia,  cor, dir_vuelo / "dz_dia.tif")
 
-    secs = crear_secciones(eje, cfg["espaciado_secciones"],
-                           cfg["ancho_corredor"], cfg["prog_inicio_m"])
-
-    # Volúmenes del día y acumulados
-    df_dia  = calcular_volumenes(dz_dia,  tf_ref, secs, pixel_area, tmp_dia)
-    df_acum = calcular_volumenes(dz_acum, tf_ref, secs, pixel_area, tmp_acum)
+    esp     = float(cfg["espaciado_secciones"])
+    cols    = ["progresiva", "vol_corte", "vol_relleno"]
+    df_dia  = nucleo.volumenes_por_seccion(dz_dia,  cor, esp, umbral)[cols]
+    df_acum = nucleo.volumenes_por_seccion(dz_acum, cor, esp, umbral)[cols]
     df_acum = df_acum.rename(columns={"vol_corte":"vol_corte_acum",
                                        "vol_relleno":"vol_relleno_acum"})
 
@@ -678,15 +543,14 @@ def procesar_dia(cfg, fecha):
     tot_r_dia  = df_dia["vol_relleno"].sum()
     tot_c_acum = df_acum["vol_corte_acum"].sum()
     tot_r_acum = df_acum["vol_relleno_acum"].sum()
-    vuelo_num  = len(reg) + 1
 
-    print(f"  Corte hoy:    {tot_c_dia:>10,.2f} m³  |  Acum: {tot_c_acum:>10,.2f} m³")
-    print(f"  Relleno hoy:  {tot_r_dia:>10,.2f} m³  |  Acum: {tot_r_acum:>10,.2f} m³")
+    print(f"  Periodo desde {desde}:")
+    print(f"  Corte periodo:    {tot_c_dia:>10,.2f} m³  |  Acum: {tot_c_acum:>10,.2f} m³")
+    print(f"  Relleno periodo:  {tot_r_dia:>10,.2f} m³  |  Acum: {tot_r_acum:>10,.2f} m³")
 
-    # Actualizar registro
     nueva_fila = pd.DataFrame([{
-        "fecha":            fecha,
-        "vuelo_num":        vuelo_num,
+        "fecha":            ts,
+        "vuelo_num":        0,
         "vol_corte_dia":    round(tot_c_dia, 3),
         "vol_relleno_dia":  round(tot_r_dia, 3),
         "balance_dia":      round(tot_c_dia - tot_r_dia, 3),
@@ -696,32 +560,32 @@ def procesar_dia(cfg, fecha):
         "semana":           fecha.strftime("%Y-W%W"),
         "mes":              fecha.strftime("%Y-%m"),
     }])
-    reg = pd.concat([reg, nueva_fila], ignore_index=True)
+    reg = _agregar(reg, nueva_fila).sort_values("fecha").reset_index(drop=True)
+    reg["vuelo_num"] = range(1, len(reg) + 1)
     guardar_registro(base, reg)
+    vuelo_num = int(reg.loc[reg["fecha"] == ts, "vuelo_num"].iloc[0])
 
-    # Registro de secciones
     reg_sec = cargar_registro_secciones(base)
+    reg_sec = reg_sec[reg_sec["fecha"] != ts]
     df_sec_new = df_dia.rename(columns={"vol_corte":"vol_corte_dia",
                                          "vol_relleno":"vol_relleno_dia"})
     df_sec_new = df_sec_new.merge(df_acum, on="progresiva")
-    df_sec_new["fecha"] = fecha
+    df_sec_new["fecha"] = ts
     df_sec_new = df_sec_new[SEC_COLS]
-    reg_sec = pd.concat([reg_sec, df_sec_new], ignore_index=True)
+    reg_sec = _agregar(reg_sec, df_sec_new).sort_values(
+        "fecha", kind="stable").reset_index(drop=True)
     guardar_registro_secciones(base, reg_sec)
 
-    # Heatmap del día
     dir_d = base / "reportes" / "diarios"
     dir_d.mkdir(parents=True, exist_ok=True)
     heatmap_path = str(dir_d / f"heatmap_{fecha.isoformat()}.png")
-    generar_heatmap(dz_dia, tf_ref, secs, eje,
-                    f"ΔZ del día {fecha.strftime('%d/%m/%Y')} — producción diaria",
-                    heatmap_path,
-                    cfg["dz_min_plot"], cfg["dz_max_plot"])
+    generar_heatmap(nucleo.filtrar_ruido(dz_dia, umbral), cor,
+                    f"ΔZ del periodo {desde} → {fecha.strftime('%d/%m/%Y')}",
+                    heatmap_path, cfg["dz_min_plot"], cfg["dz_max_plot"])
 
-    # Reporte diario
     ruta_xlsx = str(dir_d / f"reporte_{fecha.isoformat()}.xlsx")
     reporte_diario(cfg, fecha, vuelo_num, df_dia, df_acum,
-                   reg.iloc[-1], heatmap_path, ruta_xlsx)
+                   reg.iloc[-1], heatmap_path, ruta_xlsx, desde)
     print(f"  → {ruta_xlsx}")
     return reg
 
@@ -751,10 +615,11 @@ def procesar_mensual(cfg, reg, fecha_ref):
     base = cfg["_base"]
     reg = reg.copy()
     reg["fecha"] = pd.to_datetime(reg["fecha"], format='mixed')
-    if fecha_ref.day == 1:
-        mes_str = (fecha_ref - timedelta(days=1)).strftime("%Y-%m")
-    else:
-        mes_str = fecha_ref.strftime("%Y-%m")
+
+    # Mes del vuelo; si no tiene datos (corte automático el día 1), el mes anterior
+    mes_str = fecha_ref.strftime("%Y-%m")
+    if reg[reg["mes"] == mes_str].empty:
+        mes_str = (fecha_ref.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
 
     mes_df = reg[reg["mes"] == mes_str].sort_values("fecha")
     if mes_df.empty:
@@ -762,31 +627,20 @@ def procesar_mensual(cfg, reg, fecha_ref):
         return
 
     ultimo_dia = pd.Timestamp(mes_df.iloc[-1]["fecha"]).date()
-    dsm_ultimo = base / "vuelos" / ultimo_dia.isoformat() / "dsm.tif"
-    baseline_p = ruta(cfg, "dem_baseline")
-    eje_p      = ruta(cfg, "eje_via")
-
-    arr_base, tf_ref, crs_ref, meta_ref = cargar_dem(str(baseline_p))
-    arr_fin = alinear_dem(str(dsm_ultimo), tf_ref, crs_ref, arr_base.shape)
-    dz_mes  = arr_fin - arr_base
-    tmp_mes = str(base / "vuelos" / ultimo_dia.isoformat() / "dz_mes.tif")
-    guardar_dz_raster(dz_mes, meta_ref, tmp_mes)
-
-    if str(eje_p).endswith((".geojson", ".shp")):
-        gdf = gpd.read_file(str(eje_p))
-        if gdf.crs and gdf.crs != crs_ref: gdf = gdf.to_crs(crs_ref)
-        eje  = gdf.geometry.iloc[0]
-    else:
-        eje = cargar_eje_dxf(str(eje_p), crs_ref)
-
-    secs = crear_secciones(eje, cfg["espaciado_secciones"],
-                           cfg["ancho_corredor"], cfg["prog_inicio_m"])
+    epsg     = cfg.get("epsg_proyecto")
+    cor      = nucleo.corredor_del_proyecto(base, cfg)
+    umbral   = float(cfg.get("umbral_dz", 0.05) or 0)
+    arr_base = nucleo.leer_en_corredor(ruta(cfg, "dem_baseline"), cor, epsg)
+    arr_fin  = nucleo.leer_en_corredor(_dsm_de(base, ultimo_dia), cor, epsg)
+    dz_mes   = arr_fin - arr_base
+    nucleo.guardar_raster(dz_mes, cor,
+                          base / "vuelos" / ultimo_dia.isoformat() / "dz_mes.tif")
 
     dir_m = base / "reportes" / "mensuales"
     dir_m.mkdir(parents=True, exist_ok=True)
     heatmap_mes = str(dir_m / f"heatmap_{mes_str}.png")
-    generar_heatmap(dz_mes, tf_ref, secs, eje,
-                    f"ΔZ acumulado del mes {mes_str}",
+    generar_heatmap(nucleo.filtrar_ruido(dz_mes, umbral), cor,
+                    f"ΔZ acumulado al cierre de {mes_str} (vs. referencia)",
                     heatmap_mes, cfg["dz_min_plot"], cfg["dz_max_plot"])
 
     ruta_xlsx = str(dir_m / f"reporte_{mes_str}.xlsx")
@@ -794,11 +648,11 @@ def procesar_mensual(cfg, reg, fecha_ref):
     print(f"  → {ruta_xlsx}")
 
     ruta_xml = str(dir_m / f"superficies_civil3d_{mes_str}.xml")
-    epsg = crs_ref.to_epsg() if crs_ref else None
     escribir_landxml(
         [("Baseline",       f"DEM inicial — {cfg['nombre']}", arr_base),
          (f"Fin_{mes_str}", f"DSM fin de mes {mes_str}",      arr_fin)],
-        tf_ref, cfg["paso_muestreo_landxml"], ruta_xml, epsg)
+        cor.transform, cfg["paso_muestreo_landxml"], ruta_xml,
+        cor.crs.to_epsg() if cor.crs else None)
     print(f"  → {ruta_xml}")
 
 
@@ -824,15 +678,18 @@ if __name__ == "__main__":
     print(f"Fecha: {fecha.isoformat()}")
     print("=" * 62)
 
-    reg = procesar_dia(cfg, fecha)
+    try:
+        reg = procesar_dia(cfg, fecha)
 
-    if fecha.weekday() == 0 or args.semanal:
-        print("\n  Generando reporte semanal …")
-        procesar_semanal(cfg, reg, fecha)
+        if fecha.weekday() == 0 or args.semanal:
+            print("\n  Generando reporte semanal …")
+            procesar_semanal(cfg, reg, fecha)
 
-    if fecha.day == 1 or args.mensual:
-        print("\n  Generando reporte mensual …")
-        procesar_mensual(cfg, reg, fecha)
+        if fecha.day == 1 or args.mensual:
+            print("\n  Generando reporte mensual …")
+            procesar_mensual(cfg, reg, fecha)
+    except nucleo.EntradaInvalida as e:
+        sys.exit(f"\n[ERROR] {e}")
 
     print("\n" + "=" * 62)
     print("  Listo.")

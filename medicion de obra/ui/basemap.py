@@ -65,13 +65,29 @@ def build_overlay(dem_path: Optional[Path], dz_path: Optional[Path],
         if dz_path is None or not Path(dz_path).exists():
             return None
 
-        dz = _read_array(Path(dz_path))
-        h, w = dz.shape
+        import rasterio
+        from rasterio.warp import reproject, Resampling
 
-        # Basemap: hillshade del DEM (remuestreado a la malla de dz) o gris.
+        # ΔZ (malla del corredor), decimado si es muy grande para la pantalla.
+        with rasterio.open(dz_path) as ds:
+            f = max(1.0, max(ds.width, ds.height) / 2500)
+            h, w = max(1, int(ds.height / f)), max(1, int(ds.width / f))
+            dz_tf = ds.transform * ds.transform.scale(ds.width / w, ds.height / h)
+            dz_crs = ds.crs
+        dz = _read_array(Path(dz_path), out_shape=(h, w))
+
+        # Basemap: hillshade del DEM llevado a la MISMA malla de dz (el ΔZ solo
+        # cubre el corredor, así que no basta con redimensionar el DEM entero).
         if dem_path is not None and Path(dem_path).exists():
-            dem = _read_array(Path(dem_path), out_shape=(h, w))
-            base = _hillshade(dem)
+            dem = np.full((h, w), np.nan, dtype="float32")
+            with rasterio.open(dem_path) as src:
+                reproject(source=rasterio.band(src, 1), destination=dem,
+                          src_transform=src.transform, src_crs=src.crs or dz_crs,
+                          dst_transform=dz_tf, dst_crs=dz_crs or src.crs,
+                          src_nodata=src.nodata, dst_nodata=np.nan,
+                          resampling=Resampling.bilinear)
+            dem[dem < -9000] = np.nan
+            base = _hillshade(dem) if np.isfinite(dem).any() else np.full((h, w), 0.72, dtype="float32")
         else:
             base = np.full((h, w), 0.72, dtype="float32")
         base_rgb = np.dstack([base, base, base])

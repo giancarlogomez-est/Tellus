@@ -13,19 +13,33 @@ import numpy as np
 warnings.filterwarnings("ignore")
 
 
-def cargar_dem(path: str, nodata: float = -9999.0):
+MAX_LADO_UI = 3000   # la interfaz nunca carga más de ~9 M de píxeles por DEM
+
+
+def cargar_dem(path: str, nodata: float = -9999.0, max_lado: int = MAX_LADO_UI):
+    """Lee un DEM para visualización. Si es muy grande (vuelos reales de varios
+    GB) lo lee decimado y devuelve el transform ajustado a esa resolución."""
     import rasterio
+    from rasterio.enums import Resampling
     with rasterio.open(path) as src:
-        arr = src.read(1).astype("float64")
-        arr[arr == (src.nodata if src.nodata is not None else nodata)] = np.nan
-        return arr, src.transform, src.crs, src.meta.copy()
+        f = max(1.0, max(src.width, src.height) / max_lado)
+        h, w = max(1, int(src.height / f)), max(1, int(src.width / f))
+        arr = src.read(1, out_shape=(h, w),
+                       resampling=Resampling.average if f > 1 else Resampling.nearest
+                       ).astype("float32")
+        nd = src.nodata if src.nodata is not None else nodata
+        arr[(arr == nd) | (arr <= -9000) | ~np.isfinite(arr)] = np.nan
+        tf = src.transform * src.transform.scale(src.width / w, src.height / h)
+        meta = src.meta.copy()
+        meta.update(width=w, height=h, transform=tf)
+        return arr, tf, src.crs, meta
 
 
 def alinear_dem(path: str, ref_tf, ref_crs, ref_shape,
                 nodata: float = -9999.0) -> np.ndarray:
     import rasterio
     from rasterio.warp import reproject, Resampling
-    arr = np.full(ref_shape, np.nan, dtype="float64")
+    arr = np.full(ref_shape, np.nan, dtype="float32")
     with rasterio.open(path) as src:
         reproject(
             source=rasterio.band(src, 1), destination=arr,
