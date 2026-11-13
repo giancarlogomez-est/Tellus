@@ -1,5 +1,5 @@
 {
-  "_instrucciones": "Edita los valores con los datos reales del proyecto. Rutas relativas a la carpeta raíz (medicion de obra/).",
+  "_instrucciones": "Edita los valores con los datos reales del proyecto. Rutas relativas a la carpeta raíz (medicion de obra/). ancho_corredor = metros a CADA lado del eje. resolucion_trabajo = m/píxel del cálculo (0 = nativa del DEM). umbral_dz = cambios de cota menores (m) se consideran ruido y no suman volumen.",
   "nombre": "Accesos Norte UF1",
   "tramo": "K2+600 - K5+750",
   "contrato": "",
@@ -8,6 +8,8 @@
   "prog_inicio_m": 2600.0,
   "espaciado_secciones": 10.0,
   "ancho_corredor": 20.0,
+  "resolucion_trabajo": 0.5,
+  "umbral_dz": 0.05,
   "factor_esponjamiento": 1.25,
   "factor_contraccion": 0.9,
   "epsg_proyecto": 9377,

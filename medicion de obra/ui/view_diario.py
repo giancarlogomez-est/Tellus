@@ -386,12 +386,13 @@ class DiarioView(ctk.CTkFrame):
         if not path:
             return
         try:
+            self.state.validar_elevacion(path)
             dest = self._ensure_baseline() / "dem_baseline.tif"
             shutil.copy2(path, dest)
             self._card_dem_ini.set_loaded(dest)
             self._refresh_insumos_status()
         except Exception as exc:
-            messagebox.showerror("Error al copiar archivo", str(exc))
+            messagebox.showerror("No se pudo cargar el archivo", str(exc))
 
     def _upload_eje(self):
         path = filedialog.askopenfilename(
@@ -407,7 +408,7 @@ class DiarioView(ctk.CTkFrame):
             self._card_eje.set_loaded(dest)
             self._refresh_insumos_status()
         except Exception as exc:
-            messagebox.showerror("Error al copiar archivo", str(exc))
+            messagebox.showerror("No se pudo cargar el archivo", str(exc))
 
     def _upload_dem_final(self):
         path = filedialog.askopenfilename(
@@ -418,12 +419,13 @@ class DiarioView(ctk.CTkFrame):
         if not path:
             return
         try:
+            self.state.validar_elevacion(path)
             dest = self._ensure_baseline() / "dem_final.tif"
             shutil.copy2(path, dest)
             self._card_dem_final.set_loaded(dest)
             self._refresh_insumos_status()
         except Exception as exc:
-            messagebox.showerror("Error al copiar archivo", str(exc))
+            messagebox.showerror("No se pudo cargar el archivo", str(exc))
 
     def _ensure_baseline(self) -> Path:
         d = self.state.baseline_dir
@@ -656,7 +658,8 @@ class DiarioView(ctk.CTkFrame):
         """Abre diálogo de archivos, pide fecha por cada TIF y lo importa."""
         rutas = filedialog.askopenfilenames(
             title="Seleccionar DEM(s) .tif",
-            filetypes=[("GeoTIFF", "*.tif *.tiff"), ("Todos", "*.*")],
+            filetypes=[("Modelo de elevación GeoTIFF (DSM/MDT)", "*.tif *.tiff"),
+                       ("Todos", "*.*")],
         )
         if not rutas:
             return
@@ -664,6 +667,13 @@ class DiarioView(ctk.CTkFrame):
         importados = []
         for ruta in rutas:
             nombre = ruta.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+            try:
+                self.state.validar_elevacion(ruta)
+            except Exception as exc:
+                messagebox.showerror(
+                    "Archivo no válido para medir volúmenes",
+                    f"{nombre}\n\n{exc}")
+                continue
             dlg = _DateAskDialog(self.winfo_toplevel(), nombre)
             self.wait_window(dlg)
             if dlg.result is None:

@@ -78,6 +78,10 @@ class ConfigView(ctk.CTkFrame):
                     numeric=True)
         self._campo(cont, "ancho_corredor",       "Ancho del corredor (m, a cada lado)",
                     numeric=True)
+        self._campo(cont, "resolucion_trabajo",   "Resolución de cálculo (m/píxel)",
+                    "0.5 recomendado · 0 = nativa del DEM", numeric=True)
+        self._campo(cont, "umbral_dz",            "Umbral de ruido |ΔZ| (m)",
+                    "cambios menores no suman volumen", numeric=True)
 
         # ── Proyección ──────────────────────────────────────────────────
         card = Card(scroll, title="Sistema de proyección")
@@ -148,6 +152,8 @@ class ConfigView(ctk.CTkFrame):
             "prog_inicio_m": 0,
             "espaciado_secciones": 20,
             "ancho_corredor": 28,
+            "resolucion_trabajo": 0.5,
+            "umbral_dz": 0.05,
             "epsg_proyecto": 9377,
             "vol_corte_objetivo":  15000,
             "vol_relleno_objetivo": 25000,
@@ -156,7 +162,7 @@ class ConfigView(ctk.CTkFrame):
             "paso_muestreo_landxml": 4,
         }
         for k, v in self._vars.items():
-            val = cfg.get(k, "")
+            val = cfg.get(k, {"resolucion_trabajo": 0.5, "umbral_dz": 0.05}.get(k, ""))
             if k == "epsg_proyecto":
                 etiqueta = next((f"{e} — {d}" for e, d in EPSG_PRESETS
                                   if e == str(val)), str(val))
@@ -204,6 +210,8 @@ class ConfigView(ctk.CTkFrame):
             cfg["prog_inicio_m"]       = float(self._vars["prog_inicio_m"].get() or 0)
             cfg["espaciado_secciones"] = float(self._vars["espaciado_secciones"].get() or 20)
             cfg["ancho_corredor"]      = float(self._vars["ancho_corredor"].get() or 28)
+            cfg["resolucion_trabajo"]  = float(self._vars["resolucion_trabajo"].get() or 0)
+            cfg["umbral_dz"]           = float(self._vars["umbral_dz"].get() or 0)
             cfg["vol_corte_objetivo"]   = float(self._vars["vol_corte_objetivo"].get() or 0)
             cfg["vol_relleno_objetivo"] = float(self._vars["vol_relleno_objetivo"].get() or 0)
             cfg["factor_esponjamiento"] = float(self._vars["factor_esponjamiento"].get() or 1.25)

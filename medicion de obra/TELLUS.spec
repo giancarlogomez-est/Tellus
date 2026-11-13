@@ -60,6 +60,8 @@ hidden_imports = [
     "ezdxf",
     # PIL
     "PIL", "PIL.Image", "PIL.ImageTk",
+    # Núcleo de cálculo (lo importan la UI, el pipeline y el cálculo por frentes)
+    "nucleo", "scipy.spatial", "rasterio.features",
     # UI interna
     "ui", "ui.app", "ui.state", "ui.theme",
     "ui.view_dashboard", "ui.view_diario", "ui.view_dron",

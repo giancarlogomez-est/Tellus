@@ -4,6 +4,46 @@ Sistema completo para medir volúmenes de tierra en tiempo real durante la ejecu
 
 ---
 
+## Qué archivo necesita la app (leer primero)
+
+Para medir volúmenes se necesitan **cotas**, no imágenes:
+
+| Archivo que te entregan | ¿Sirve? | Por qué |
+|---|---|---|
+| **GeoTIFF de elevación** (DSM/MDS o MDT: 1 banda, valores decimales) | **Sí** | Cada píxel es una cota en metros |
+| GeoTIFF de ortofoto (3–4 bandas RGB, 8 bits) | No | Es una foto: no tiene cotas |
+| `.ecw` | No | Es una ortofoto comprimida (solo imagen) |
+
+La app valida cada archivo al cargarlo y rechaza ortofotos y `.ecw` con un
+mensaje claro. Para revisar un archivo sin abrir la app:
+
+```
+python nucleo.py ruta/al/archivo.tif
+```
+
+El DSM sale del mismo procesamiento fotogramétrico que la ortofoto (Pix4D,
+Metashape, DJI Terra, ODM), así que basta con pedirlo a quien procesa el vuelo:
+*"DSM en GeoTIFF, mismo sistema de coordenadas del proyecto, con los mismos
+puntos de control de siempre"*.
+
+### Flujo mensual
+
+1. **Una sola vez:** cargar el DEM de referencia (terreno antes de excavar) y el
+   eje en DXF en *Vuelos y modelos DEM → Insumos base*; revisar *Configuración*
+   (abscisa inicial, ancho a cada lado del eje, EPSG).
+2. **Cada mes:** *Vuelos y modelos DEM → cargar el DSM del vuelo → indicar la
+   fecha → Ejecutar*. Los reportes semanal y mensual se generan siempre.
+3. La app compara contra el vuelo anterior (producción del periodo) y contra la
+   referencia (acumulado), por abscisa, y genera Excel, gráfico de producción
+   por sección y LandXML.
+
+Parámetros que afectan el resultado (`proyecto_config.json` / Configuración):
+`ancho_corredor` (m a **cada** lado del eje), `resolucion_trabajo` (m/píxel del
+cálculo; 0.5 recomendado) y `umbral_dz` (cambios de cota menores se tratan como
+ruido y no suman volumen; 0.05 m por defecto).
+
+---
+
 ## ⚡ Interfaz gráfica — VolumenView
 
 Para usar el proyecto sin necesidad de línea de comandos:
@@ -156,8 +196,7 @@ Compatible con este flujo. Para obtener precisión aceptable (±5–10 cm vertic
 ## Dependencias
 
 ```
-pip install pandas numpy openpyxl rasterio geopandas shapely matplotlib scipy ezdxf
-pip install customtkinter pillow            # solo para la interfaz gráfica
+pip install -r requirements.txt
 ```
 
 ---

@@ -11,12 +11,16 @@ de los frentes deben darse en metros desde ese origen.
 Lee:
   baseline/dem_baseline.tif       — DEM inicial (terreno natural)
   baseline/dem_final.tif          — DEM final de diseño  (solo sin --fecha)
-  baseline/eje_via.dxf            — Eje de la vía (inicia en K0+000)
+  eje de la vía configurado       — inicia en K0+000
   vuelos/FECHA/dz_acum.tif        — ΔZ acumulado del vuelo  (solo con --fecha)
   proyecto_config.json            — frentes, ancho_corredor
 
 Escribe:
   baseline/frentes_resultado.json
+  baseline/perfil_objetivo.json | baseline/perfil_avance.json
+
+Usa el mismo núcleo que el pipeline (nucleo.py): misma malla recortada al
+corredor y mismo ancho (ancho_corredor = metros a CADA lado del eje).
 """
 from __future__ import annotations
 
@@ -28,11 +32,10 @@ from pathlib import Path
 import numpy as np
 
 BASE = Path(__file__).parent   # medicion de obra/
+sys.path.insert(0, str(BASE))
+import nucleo  # noqa: E402
 
-
-def _km_str(m: float) -> str:
-    m_int = int(m)
-    return f"K{m_int // 1000}+{m_int % 1000:03d}"
+STEP = 10.0   # separación de estaciones del perfil (m)
 
 
 def main() -> None:
@@ -45,260 +48,129 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # ── Configuración ────────────────────────────────────────────────────
     cfg_path = BASE / "proyecto_config.json"
     if not cfg_path.exists():
-        print("ERROR: proyecto_config.json no encontrado.", flush=True)
-        sys.exit(1)
+        sys.exit("ERROR: proyecto_config.json no encontrado.")
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg.setdefault("dem_baseline", "baseline/dem_baseline.tif")
 
     frentes = cfg.get("frentes", [])
     if not frentes:
-        print("ERROR: No hay frentes de obra definidos en la configuración.", flush=True)
-        sys.exit(1)
+        sys.exit("ERROR: No hay frentes de obra definidos en la configuración.")
 
-    # El eje DXF inicia en K0+000 → prog_inicio siempre = 0
-    ancho = float(cfg.get("ancho_corredor", 20.0))
-
-    # ── Rutas base ────────────────────────────────────────────────────────
-    dem_ini_path = BASE / "baseline" / "dem_baseline.tif"
-    eje_path     = BASE / "baseline" / "eje_via.dxf"
-
-    for p in (dem_ini_path, eje_path):
-        if not p.exists():
-            print(f"ERROR: No se encontró {p.name}", flush=True)
-            sys.exit(1)
-
-    # ── Modo de operación ─────────────────────────────────────────────────
-    if args.fecha:
-        dz_path = BASE / "vuelos" / args.fecha / "dz_acum.tif"
-        if not dz_path.exists():
-            print(
-                f"ERROR: No se encontró dz_acum.tif para la fecha {args.fecha}",
-                flush=True,
-            )
-            print(
-                f"  Ruta esperada: {dz_path}\n"
-                "  Verifica que el pipeline se haya ejecutado para esa fecha.",
-                flush=True,
-            )
-            sys.exit(1)
-        modo_label = f"Avance al {args.fecha}"
-        print(f"Modo: volumen de avance real — vuelo {args.fecha}", flush=True)
-    else:
-        dem_fin_path = BASE / "baseline" / "dem_final.tif"
-        if not dem_fin_path.exists():
-            print("ERROR: No se encontró dem_final.tif", flush=True)
-            sys.exit(1)
-        modo_label = "Objetivo (diseño)"
-        print("Modo: volumen objetivo (dem_final − dem_baseline)", flush=True)
-
-    # ── DEM inicial → transform y CRS de referencia ──────────────────────
-    print("Cargando DEM inicial (referencia de grilla) …", flush=True)
-    import rasterio
-
-    with rasterio.open(str(dem_ini_path)) as src:
-        arr_ini  = src.read(1).astype("float64")
-        nd       = src.nodata
-        if nd is not None:
-            arr_ini[arr_ini == nd] = np.nan
-        transform    = src.transform
-        crs          = src.crs
-        nrows, ncols = arr_ini.shape
-
-    pixel_w  = abs(transform.a)
-    pixel_h  = abs(transform.e)
-    pixel_m2 = pixel_w * pixel_h
+    # ── Corredor: el eje DXF inicia en K0+000 → prog_inicio = 0 ───────────
+    print("Preparando corredor y abscisas (origen K0+000) …", flush=True)
+    cor = nucleo.corredor_del_proyecto(BASE, {**cfg, "prog_inicio_m": 0.0})
+    epsg = cfg.get("epsg_proyecto")
+    umbral = 0.0
+    print(f"  Malla: {cor.shape[1]}×{cor.shape[0]} px a {cor.res:.2f} m  |  "
+          f"eje {cor.eje.length:,.0f} m  |  ancho {cor.ancho:.0f} m a cada lado", flush=True)
 
     # ── Raster de diferencia ΔZ ───────────────────────────────────────────
     if args.fecha:
-        print(f"Cargando ΔZ acumulado del vuelo {args.fecha} …", flush=True)
-        with rasterio.open(str(dz_path)) as src:
-            dz = src.read(1).astype("float64")
-            nd_dz = src.nodata
-            if nd_dz is not None:
-                dz[dz == nd_dz] = np.nan
+        dz_path = BASE / "vuelos" / args.fecha / "dz_acum.tif"
+        if not dz_path.exists():
+            sys.exit(f"ERROR: No se encontró dz_acum.tif para la fecha {args.fecha}\n"
+                     f"  Ruta esperada: {dz_path}\n"
+                     "  Verifica que el pipeline se haya ejecutado para esa fecha.")
+        modo_label = f"Avance al {args.fecha}"
+        print(f"Modo: volumen de avance real — vuelo {args.fecha}", flush=True)
+        dz = nucleo.leer_en_corredor(dz_path, cor, epsg)
+        umbral = float(cfg.get("umbral_dz", 0.05) or 0)   # igual que el pipeline
     else:
-        print("Cargando DEM final y alineando al grid del DEM inicial …", flush=True)
-        arr_fin = np.full((nrows, ncols), np.nan, dtype="float64")
-        from rasterio.warp import reproject, Resampling
-        with rasterio.open(str(dem_fin_path)) as src:
-            reproject(
-                source=rasterio.band(src, 1),
-                destination=arr_fin,
-                src_transform=src.transform,
-                src_crs=src.crs,
-                dst_transform=transform,
-                dst_crs=crs,
-                resampling=Resampling.bilinear,
-                src_nodata=src.nodata if src.nodata is not None else -9999.0,
-                dst_nodata=np.nan,
-            )
-        dz = arr_fin - arr_ini   # + relleno (llenar) | − corte (excavar)
+        dem_fin_path = nucleo.ruta_dem_final(BASE)
+        if dem_fin_path is None:
+            sys.exit("ERROR: No se encontró dem_final.tif")
+        modo_label = "Objetivo (diseño)"
+        print("Modo: volumen objetivo (dem_final − dem_baseline)", flush=True)
+        nucleo.exigir_elevacion(dem_fin_path, "El DEM final")
+        dz = (nucleo.leer_en_corredor(dem_fin_path, cor, epsg)
+              - nucleo.leer_en_corredor(BASE / cfg["dem_baseline"], cor, epsg))
+        # + relleno (llenar) | − corte (excavar)
 
-    # ── Eje de la vía ────────────────────────────────────────────────────
-    print("Cargando eje de la vía (origen K0+000) …", flush=True)
-    sys.path.insert(0, str(BASE))
-    from ui.eje_utils import cargar_eje
-    eje = cargar_eje(str(eje_path))
-
-    # ── Raster de abscisas ───────────────────────────────────────────────
-    # prog_inicio = 0 porque el DXF inicia en K0+000
-    print("Generando raster de abscisas (K0+000 como origen) …", flush=True)
-    from scipy.spatial import cKDTree
-
-    L         = eje.length
-    n_samples = max(int(L) + 2, 3)
-    sample_ds = np.linspace(0.0, L, n_samples)
-    eje_pts   = np.array(
-        [(eje.interpolate(d).x, eje.interpolate(d).y) for d in sample_ds]
-    )
-    eje_abs = sample_ds          # K0+000 como origen → abscisa = distancia
-
-    # Centros de pixel
-    cols_1d = np.arange(ncols, dtype="float64")
-    rows_1d = np.arange(nrows, dtype="float64")
-    xs_1d   = transform.c + (cols_1d + 0.5) * transform.a
-    ys_1d   = transform.f + (rows_1d + 0.5) * transform.e
-    xs_2d, ys_2d = np.meshgrid(xs_1d, ys_1d)
-
-    tree   = cKDTree(eje_pts)
-    coords = np.column_stack([xs_2d.ravel(), ys_2d.ravel()])
-    raw_d, nn_idx = tree.query(coords, workers=-1)
-
-    abs_raster  = eje_abs[nn_idx].reshape(nrows, ncols)
-    dist_raster = raw_d.reshape(nrows, ncols)
-
-    # Máscara de corredor
-    in_corridor = dist_raster <= (ancho / 2.0)
-
-    # Máscara de datos válidos
-    valid = np.isfinite(dz) & in_corridor
+    if nucleo.cobertura(dz, cor) < 1:
+        raise nucleo.EntradaInvalida(
+            "No hay datos dentro del corredor: revisa el sistema de coordenadas "
+            "del eje y de los modelos.")
 
     # ── Calcular por frente ──────────────────────────────────────────────
     resultados: list[dict] = []
     t_corte = t_relleno = 0.0
-
     for i, fr in enumerate(frentes):
-        nombre     = str(fr.get("nombre", f"Frente {i + 1}"))
-        abs_ini_fr = float(fr["abs_ini"])
-        abs_fin_fr = float(fr["abs_fin"])
-
-        print(
-            f"Calculando {nombre}  "
-            f"({_km_str(abs_ini_fr)} → {_km_str(abs_fin_fr)}) …",
-            flush=True,
-        )
-
-        mask   = valid & (abs_raster >= abs_ini_fr) & (abs_raster <= abs_fin_fr)
-        dz_fr  = dz[mask]
-        n_px   = int(mask.sum())
-
-        corte_m3   = float(np.sum(np.abs(dz_fr[dz_fr < 0])) * pixel_m2)
-        relleno_m3 = float(np.sum(dz_fr[dz_fr > 0]) * pixel_m2)
-        balance_m3 = relleno_m3 - corte_m3
-        area_m2    = n_px * pixel_m2
-
-        t_corte   += corte_m3
-        t_relleno += relleno_m3
-
-        print(
-            f"  → Área: {area_m2:,.0f} m²  |  "
-            f"Corte: {corte_m3:,.1f} m³  |  "
-            f"Relleno: {relleno_m3:,.1f} m³  |  "
-            f"Balance: {balance_m3:+,.1f} m³",
-            flush=True,
-        )
-
+        nombre = str(fr.get("nombre", f"Frente {i + 1}"))
+        a_ini, a_fin = float(fr["abs_ini"]), float(fr["abs_fin"])
+        v = nucleo.volumen_en_tramo(dz, cor, a_ini, a_fin, umbral)
+        balance = v["relleno_m3"] - v["corte_m3"]
+        t_corte += v["corte_m3"]; t_relleno += v["relleno_m3"]
+        print(f"Calculando {nombre}  ({nucleo.km_str(a_ini)} → {nucleo.km_str(a_fin)}) …\n"
+              f"  → Área: {v['area_m2']:,.0f} m²  |  Corte: {v['corte_m3']:,.1f} m³  |  "
+              f"Relleno: {v['relleno_m3']:,.1f} m³  |  Balance: {balance:+,.1f} m³", flush=True)
+        if v["area_m2"] == 0:
+            print("  [!] Sin datos en este tramo: las abscisas del frente se miden "
+                  "desde el inicio del eje (K0+000).", flush=True)
         resultados.append({
-            "nombre":     nombre,
-            "abs_ini":    abs_ini_fr,
-            "abs_fin":    abs_fin_fr,
-            "area_m2":    round(area_m2, 1),
-            "corte_m3":   round(corte_m3, 1),
-            "relleno_m3": round(relleno_m3, 1),
-            "balance_m3": round(balance_m3, 1),
+            "nombre": nombre, "abs_ini": a_ini, "abs_fin": a_fin,
+            "area_m2": round(v["area_m2"], 1),
+            "corte_m3": round(v["corte_m3"], 1),
+            "relleno_m3": round(v["relleno_m3"], 1),
+            "balance_m3": round(balance, 1),
         })
 
-    # Fila de totales
     t_balance = t_relleno - t_corte
     resultados.append({
-        "nombre":     "TOTAL",
-        "abs_ini":    None,
-        "abs_fin":    None,
-        "area_m2":    None,
-        "corte_m3":   round(t_corte, 1),
-        "relleno_m3": round(t_relleno, 1),
+        "nombre": "TOTAL", "abs_ini": None, "abs_fin": None, "area_m2": None,
+        "corte_m3": round(t_corte, 1), "relleno_m3": round(t_relleno, 1),
         "balance_m3": round(t_balance, 1),
     })
+    print(f"\nTOTAL  →  Corte: {t_corte:,.1f} m³  |  "
+          f"Relleno: {t_relleno:,.1f} m³  |  Balance: {t_balance:+,.1f} m³", flush=True)
 
-    print(
-        f"\nTOTAL  →  Corte: {t_corte:,.1f} m³  |  "
-        f"Relleno: {t_relleno:,.1f} m³  |  Balance: {t_balance:+,.1f} m³",
-        flush=True,
-    )
-
-    # ── Guardar resultado ────────────────────────────────────────────────
     out_path = BASE / "baseline" / "frentes_resultado.json"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    salida = {
-        "fecha":     args.fecha,     # None si es modo objetivo
-        "modo":      modo_label,
-        "frentes":   resultados,
-    }
-    out_path.write_text(
-        json.dumps(salida, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    out_path.write_text(json.dumps(
+        {"fecha": args.fecha, "modo": modo_label, "frentes": resultados},
+        indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\nResultados guardados en {out_path.name}", flush=True)
 
-    # ── Perfil por estación (cada 10 m) ─────────────────────────────────
+    # ── Perfil por estación (cada 10 m, estación centrada) ───────────────
     print("\nGenerando perfil por estación (cada 10 m) …", flush=True)
-    STEP = 10.0
-    frentes_ranges = [
-        (float(fr["abs_ini"]), float(fr["abs_fin"]))
-        for fr in frentes
-        if fr.get("abs_ini") is not None
-    ]
-    abs_global_min = min(r[0] for r in frentes_ranges)
-    abs_global_max = max(r[1] for r in frentes_ranges)
+    rangos = [(float(fr["abs_ini"]), float(fr["abs_fin"])) for fr in frentes
+              if fr.get("abs_ini") is not None]
+    a_min = min(r[0] for r in rangos)
+    a_max = max(r[1] for r in rangos)
+    n = int(np.floor((a_max - a_min) / STEP + 0.5)) + 1
 
-    stations = np.arange(abs_global_min, abs_global_max + STEP * 0.5, STEP)
+    ok = np.isfinite(dz) & np.isfinite(cor.abscisa)
+    d = dz[ok].astype("float64")
+    if umbral > 0:
+        d[np.abs(d) < umbral] = 0.0
+    idx = np.floor((cor.abscisa[ok] - (a_min - STEP / 2.0)) / STEP).astype(int)
+    dentro = (idx >= 0) & (idx < n)
+    idx, d = idx[dentro], d[dentro]
+    pa = cor.pixel_area
+    corte = np.bincount(idx, weights=np.where(d < 0, -d, 0.0), minlength=n) * pa
+    relleno = np.bincount(idx, weights=np.where(d > 0, d, 0.0), minlength=n) * pa
+    cuenta = np.bincount(idx, minlength=n)
+
     perfil: list[dict] = []
-
-    for st in stations:
-        if not any(ini <= st <= fin for ini, fin in frentes_ranges):
+    for k in range(n):
+        st = a_min + k * STEP
+        if cuenta[k] == 0 or not any(ini <= st <= fin for ini, fin in rangos):
             continue
-        lo = st - STEP / 2.0
-        hi = st + STEP / 2.0
-        band_mask = valid & (abs_raster >= lo) & (abs_raster < hi)
-        dz_band = dz[band_mask]
-        if dz_band.size == 0:
-            continue
-        c_m3 = float(np.sum(np.abs(dz_band[dz_band < 0])) * pixel_m2)
-        r_m3 = float(np.sum(dz_band[dz_band > 0]) * pixel_m2)
-        perfil.append({
-            "abs":        round(float(st), 1),
-            "corte_m3":   round(c_m3, 2),
-            "relleno_m3": round(r_m3, 2),
-        })
+        perfil.append({"abs": round(float(st), 1),
+                       "corte_m3": round(float(corte[k]), 2),
+                       "relleno_m3": round(float(relleno[k]), 2)})
 
-    perfil_path = (
-        BASE / "baseline" / "perfil_avance.json"
-        if args.fecha
-        else BASE / "baseline" / "perfil_objetivo.json"
-    )
-    perfil_data = {
-        "fecha": args.fecha,
-        "modo":  modo_label,
-        "perfil": perfil,
-    }
-    perfil_path.write_text(
-        json.dumps(perfil_data, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    print(f"Perfil por estación guardado en {perfil_path.name}  ({len(perfil)} puntos)", flush=True)
+    perfil_path = BASE / "baseline" / (
+        "perfil_avance.json" if args.fecha else "perfil_objetivo.json")
+    perfil_path.write_text(json.dumps(
+        {"fecha": args.fecha, "modo": modo_label, "perfil": perfil},
+        indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"Perfil por estación guardado en {perfil_path.name}  ({len(perfil)} puntos)",
+          flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except nucleo.EntradaInvalida as e:
+        sys.exit(f"\n[ERROR] {e}")
